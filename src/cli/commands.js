@@ -33,6 +33,10 @@ import {
   listNetworkSnapshots
 } from '../services/networkSnapshot.js';
 import { loadSnapshot, SNAPSHOTS_DIR } from '../utils/snapshot.js';
+import { 
+  configureCredentialsInteractive,
+  loadCredentials
+} from '../services/credentials.js';
 
 // Helper function to create tables
 const createTable = (headers) => {
@@ -951,6 +955,64 @@ export const commands = {
       await modifyEndpointServicePermissions(region, serviceId, principal, action);
     } catch (error) {
       handleError(error, 'PrivateLink');
+    }
+  },
+
+  // Credentials management
+  async configureCredentials(method = 'access-keys', save = true) {
+    try {
+      const credentials = await configureCredentialsInteractive(method, save);
+      console.log(chalk.green('\nAWS credentials configured successfully!'));
+      
+      if (!save) {
+        console.log(chalk.yellow('\nNote: These credentials were not saved. They will be used only for this session.'));
+      }
+      
+      return credentials;
+    } catch (error) {
+      console.error(chalk.red(`Error configuring credentials: ${error.message}`));
+      throw error;
+    }
+  },
+  
+  async showCurrentCredentials() {
+    try {
+      const credentials = await loadCredentials();
+      
+      if (!credentials) {
+        console.log(chalk.yellow('No saved credentials found. Using default AWS environment credentials.'));
+        return;
+      }
+      
+      console.log(chalk.green('\nCurrent saved credentials:'));
+      console.log(chalk.cyan(`Method: ${credentials.method}`));
+      
+      // Show different details based on method
+      switch (credentials.method) {
+        case 'access-keys':
+          console.log(chalk.cyan(`Access Key ID: ${credentials.accessKeyId.substring(0, 4)}...`));
+          console.log(chalk.cyan(`Has Session Token: ${credentials.sessionToken ? 'Yes' : 'No'}`));
+          break;
+        case 'profile':
+          console.log(chalk.cyan(`Profile: ${credentials.profile}`));
+          break;
+        case 'role':
+          console.log(chalk.cyan(`Role ARN: ${credentials.roleArn}`));
+          console.log(chalk.cyan(`Session Name: ${credentials.sessionName}`));
+          console.log(chalk.cyan(`Source: ${credentials.sourceCredentials.type}`));
+          break;
+        case 'web-identity':
+          console.log(chalk.cyan(`Role ARN: ${credentials.roleArn}`));
+          console.log(chalk.cyan(`Token File: ${credentials.tokenFile}`));
+          break;
+      }
+      
+      console.log(chalk.cyan(`GovCloud: ${credentials.isGovCloud ? 'Yes' : 'No'}`));
+      console.log(chalk.cyan(`Configured: ${new Date(credentials.timestamp).toLocaleString()}`));
+      
+    } catch (error) {
+      console.error(chalk.red(`Error reading credentials: ${error.message}`));
+      throw error;
     }
   },
 };

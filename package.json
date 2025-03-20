@@ -14,7 +14,9 @@
     "test-connectivity": "node test-connectivity.js",
     "aws-connectivity": "node aws-connectivity-test.js",
     "build": "./build.sh",
-    "test": "node test/test-network-tools.js"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "bin": {
     "cloud-connect": "./src/index.js"
@@ -22,13 +24,19 @@
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.420.0",
     "@aws-sdk/client-cloudwatch": "^3.420.0",
+    "@aws-sdk/client-sts": "^3.420.0",
+    "@aws-sdk/credential-providers": "^3.420.0",
     "chalk": "^5.3.0",
     "cli-table3": "^0.6.3",
     "commander": "^11.0.0",
     "concurrently": "^8.0.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "inquirer": "^9.2.10",
     "nodemon": "^3.0.1"
+  },
+  "devDependencies": {
+    "vitest": "^0.34.3"
   },
   "private": true,
   "engines": {

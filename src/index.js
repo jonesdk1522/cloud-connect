@@ -355,6 +355,32 @@ program
     }
   });
 
+// Add a command to configure AWS credentials
+program
+  .command('configure-credentials')
+  .description('Configure AWS credentials')
+  .option('--method <method>', 'Credential method: access-keys, profile, role, or web-identity', 'access-keys')
+  .option('--save', 'Save credentials to configuration file', false)
+  .action(async (options, command) => {
+    try {
+      await commands.configureCredentials(options.method, options.save);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Add a command to show currently configured credentials
+program
+  .command('current-credentials')
+  .description('Show currently configured credentials')
+  .action(async () => {
+    try {
+      await commands.showCurrentCredentials();
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
 // Helper function to adjust region for GovCloud
 function getRegion(region, isGovCloud) {
   // If GovCloud is specified but the region doesn't look like a GovCloud region

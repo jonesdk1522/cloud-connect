@@ -1,5 +1,9 @@
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
 import chalk from 'chalk';
+import { 
+  loadCredentials, 
+  createCredentialProvider
+} from '../services/credentials.js';
 
 // Client cache to avoid creating redundant clients
 const clientCache = new Map();
@@ -33,10 +37,14 @@ export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
   }
   
   try {
+    // We'll handle credentials synchronously to maintain compatibility
+    // with existing code. For custom credentials, they'll be applied next time
+    // the application runs after configuration.
+    
     // Fix: Use correct retry configuration format per AWS SDK v3
     const client = new EC2Client({
       region: effectiveRegion,
-      maxAttempts: 3, // Use standard retry configuration
+      maxAttempts: 3,
       retryMode: 'standard'
     });
     
@@ -52,6 +60,78 @@ export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
       }
     }
     throw error;
+  }
+};
+
+/**
+ * Creates an AWS EC2 client with custom credentials
+ * This is used by credential commands but not for regular operations
+ * to avoid breaking existing code
+ */
+export const createEC2ClientWithCredentials = async (region = 'us-east-1', isGovCloud = false) => {
+  // Normalize region based on GovCloud flag
+  let effectiveRegion = region;
+  
+  // Handle GovCloud regions
+  if (isGovCloud || region.startsWith('us-gov-')) {
+    isGovCloud = true;
+    
+    if (!region.startsWith('us-gov-')) {
+      effectiveRegion = region.includes('east') ? 'us-gov-east-1' : 'us-gov-west-1';
+    }
+  }
+  
+  try {
+    // Load configured credentials
+    const savedCredentials = await loadCredentials();
+    let credentials = undefined;
+    
+    if (savedCredentials) {
+      // Override isGovCloud if specified in saved credentials
+      if (savedCredentials.isGovCloud) {
+        isGovCloud = true;
+        if (!effectiveRegion.startsWith('us-gov-')) {
+          effectiveRegion = effectiveRegion.includes('east') ? 'us-gov-east-1' : 'us-gov-west-1';
+        }
+      }
+      
+      // Create credential provider from saved configuration
+      credentials = createCredentialProvider(savedCredentials);
+    }
+    
+    return new EC2Client({
+      region: effectiveRegion,
+      maxAttempts: 3,
+      retryMode: 'standard',
+      credentials
+    });
+  } catch (error) {
+    if (error.message.includes('credentials') || error.name === 'CredentialsProviderError') {
+      if (isGovCloud) {
+        throw new Error(`AWS GovCloud authentication failed for region ${effectiveRegion}. Make sure you have valid GovCloud credentials configured.`);
+      } else {
+        throw new Error(`AWS authentication failed for region ${effectiveRegion}. Make sure you have valid credentials configured.`);
+      }
+    }
+    throw error;
+  }
+};
+
+// Use credentials for future client creation (called after configuration)
+export const applyCredentialsToClients = async () => {
+  try {
+    // Clear existing cache to force recreation with new credentials
+    clientCache.clear();
+    
+    // Load saved credentials for future client creation
+    const savedCredentials = await loadCredentials();
+    if (savedCredentials) {
+      console.log(chalk.green('Loaded saved AWS credentials'));
+    }
+    return true;
+  } catch (error) {
+    console.error('Error applying credentials:', error);
+    return false;
   }
 };
 

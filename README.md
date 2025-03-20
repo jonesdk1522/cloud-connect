@@ -1,6 +1,6 @@
 # Cloud Connect Network Tools
 
-A collection of network diagnostic tools with a Node.js interface.
+A collection of network diagnostic tools and AWS network infrastructure management utilities with a Node.js interface.
 
 ## Table of Contents
 - [Installation](#installation)
@@ -10,9 +10,16 @@ A collection of network diagnostic tools with a Node.js interface.
 - [Building the Tools](#building-the-tools)
 - [Running Tests](#running-tests)
 - [Available Tools](#available-tools)
-- [Usage Example](#usage-example)
+  - [Network Diagnostic Tools](#network-diagnostic-tools)
+  - [AWS Network Management Commands](#aws-network-management-commands)
+- [Usage Examples](#usage-examples)
+  - [Network Diagnostics](#network-diagnostics)
+  - [AWS Infrastructure](#aws-infrastructure)
 - [AWS and GovCloud Credentials](#aws-and-govcloud-credentials)
 - [Tracking Network Changes](#tracking-network-changes)
+  - [Taking Snapshots](#taking-snapshots)
+  - [Comparing Snapshots](#comparing-snapshots)
+  - [Drift Detection](#drift-detection)
 - [Required IAM Permissions](#required-iam-permissions)
 - [AWS GovCloud Regions](#aws-govcloud-regions)
 - [Direct Execution](#direct-execution)
@@ -93,6 +100,8 @@ node test/test-network-tools.js
 
 ## Available Tools
 
+### Network Diagnostic Tools
+
 - **Connectivity Testing**: Check if a host is reachable via ping or TCP
 - **Port Scanning**: Scan for open ports on a target host
 - **Traceroute**: Trace the route to a target host
@@ -100,7 +109,18 @@ node test/test-network-tools.js
 - **Network Interfaces**: Get information about local network interfaces
 - **HTTP Testing**: Test HTTP endpoints with detailed response information
 
-## Usage Example
+### AWS Network Management Commands
+
+- **VPC Management**: List, inspect, and analyze VPCs across regions
+- **Subnet Management**: View and analyze subnet configurations and details
+- **Route Tables**: Inspect route tables and their associations
+- **Transit Gateways**: Analyze TGW configurations, attachments, and routes
+- **VPC Endpoints**: Manage and analyze VPC endpoints and AWS PrivateLink services
+- **Network Infrastructure Tracking**: Take snapshots and track infrastructure changes over time
+
+## Usage Examples
+
+### Network Diagnostics
 
 ```javascript
 const networkTools = require('./src/network-tools');
@@ -114,6 +134,58 @@ networkTools.testConnectivity('8.8.8.8')
 networkTools.scanPorts('example.com', '80-443')
   .then(result => console.log(result))
   .catch(err => console.error(err));
+```
+
+### AWS Infrastructure
+
+List all VPCs in a region:
+```bash
+cloud-connect vpcs --region us-west-2
+```
+
+View detailed information about a specific VPC:
+```bash
+cloud-connect vpc-details --vpc vpc-12345678
+```
+
+List subnets in a VPC:
+```bash
+cloud-connect subnets --vpc vpc-12345678
+```
+
+List route tables for a VPC:
+```bash
+cloud-connect route-tables --vpc vpc-12345678
+```
+
+List all transit gateways:
+```bash
+cloud-connect transit-gateways
+```
+
+View transit gateway attachments:
+```bash
+cloud-connect tgw-attachments --tgw tgw-12345678
+```
+
+List VPC endpoints:
+```bash
+cloud-connect endpoints --vpc vpc-12345678
+```
+
+List PrivateLink services:
+```bash
+cloud-connect private-link
+```
+
+Get details about a specific PrivateLink service:
+```bash
+cloud-connect private-link-service vpce-svc-12345678
+```
+
+View your own PrivateLink service configurations:
+```bash
+cloud-connect my-services
 ```
 
 ## AWS and GovCloud Credentials
@@ -144,11 +216,43 @@ cloud-connect vpc-details --gov-cloud
 
 ## Tracking Network Changes
 
-Cloud Connect allows you to track changes to your AWS network infrastructure by taking and comparing snapshots:
+Cloud Connect allows you to track changes to your AWS network infrastructure by taking and comparing snapshots.
 
-1. **Take snapshots** of your network resources at different points in time
-2. **Compare snapshots** to identify what resources have been added, removed, or modified
-3. **View detailed changes** in your network infrastructure
+### Taking Snapshots
+
+Take a snapshot of network resources in a specific region:
+```bash
+cloud-connect snapshot --name baseline
+```
+
+Take a snapshot across all AWS regions:
+```bash
+cloud-connect snapshot-all --name baseline-all-regions
+```
+
+List available snapshots:
+```bash
+cloud-connect list-snapshots
+```
+
+### Comparing Snapshots
+
+Compare two snapshots to identify changes:
+```bash
+cloud-connect compare-snapshots baseline latest
+```
+
+### Drift Detection
+
+Compare a snapshot with the current live environment to detect configuration drift:
+```bash
+cloud-connect check-drift baseline
+```
+
+Check drift across all regions:
+```bash
+cloud-connect check-drift baseline --all-regions
+```
 
 Snapshots are stored locally in a `snapshots` directory as JSON files.
 
@@ -172,9 +276,14 @@ To use all features of this tool, your AWS credentials should have the following
         "ec2:DescribeSecurityGroups",
         "ec2:DescribeNetworkAcls",
         "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeVpcEndpointServices",
+        "ec2:DescribeVpcEndpointServiceConfigurations",
+        "ec2:DescribeVpcEndpointServicePermissions",
+        "ec2:DescribeVpcEndpointConnections",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeTransitGateways",
-        "ec2:DescribeTransitGatewayAttachments"
+        "ec2:DescribeTransitGatewayAttachments",
+        "ec2:DescribeTransitGatewayRouteTables"
       ],
       "Resource": "*"
     }
@@ -182,11 +291,18 @@ To use all features of this tool, your AWS credentials should have the following
 }
 ```
 
+You can check your current permissions and ensure everything is configured correctly with:
+```bash
+cloud-connect check-permissions
+```
+
 ### AWS GovCloud Regions
 
 AWS GovCloud has the following regions:
 - us-gov-east-1 (US East)
 - us-gov-west-1 (US West)
+
+Use the `--gov-cloud` flag with commands to work with GovCloud regions.
 
 ## Direct Execution
 
@@ -203,7 +319,7 @@ npm link
 After linking, you can use the tool directly:
 
 ```bash
-cloud-connect vpc-details --vpc-id vpc-12345678 --gov-cloud
+cloud-connect vpc-details --vpc vpc-12345678 --gov-cloud
 cloud-connect vpc-details --all-regions
 cloud-connect snapshot --name baseline
 cloud-connect compare-snapshots baseline latest
