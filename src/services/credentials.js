@@ -82,15 +82,31 @@ async function configureAccessKeys() {
     {
       type: 'input',
       name: 'accessKeyId',
-      message: 'Enter your AWS Access Key ID:',
-      validate: input => input.trim() !== '' ? true : 'Access Key ID is required'
+      message: 'Enter your AWS Access Key ID (type ? for help):',
+      validate: input => {
+        if (input === '?') {
+          console.log('\n' + chalk.cyan('Help: AWS Access Key ID'));
+          console.log(chalk.yellow('Your AWS Access Key ID is a 20-character, alphanumeric string.'));
+          console.log(chalk.yellow('Example: AKIAIOSFODNN7EXAMPLE'));
+          return false; // Keep prompting
+        }
+        return input.trim() !== '' ? true : 'Access Key ID is required';
+      }
     },
     {
       type: 'password',
       name: 'secretAccessKey',
-      message: 'Enter your AWS Secret Access Key:',
+      message: 'Enter your AWS Secret Access Key (type ? for help):',
       mask: '*',
-      validate: input => input.trim() !== '' ? true : 'Secret Access Key is required'
+      validate: input => {
+        if (input === '?') {
+          console.log('\n' + chalk.cyan('Help: AWS Secret Access Key'));
+          console.log(chalk.yellow('Your AWS Secret Access Key is a 40-character, alphanumeric string.'));
+          console.log(chalk.yellow('Example: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'));
+          return false; // Keep prompting
+        }
+        return input.trim() !== '' ? true : 'Secret Access Key is required';
+      }
     },
     {
       type: 'input',
@@ -145,10 +161,25 @@ async function configureRole() {
     {
       type: 'input',
       name: 'roleArn',
-      message: 'Enter the IAM role ARN to assume:',
-      validate: input => /^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[\w+=,.@-]+$/.test(input) 
-        ? true 
-        : 'Please enter a valid IAM role ARN (both standard and GovCloud ARNs are supported)'
+      message: 'Enter the IAM role ARN to assume (type ? for help):',
+      validate: input => {
+        if (input === '?') {
+          console.log('\n' + chalk.cyan('Help: IAM Role ARN'));
+          console.log(chalk.yellow('Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME'));
+          console.log(chalk.yellow('Example: arn:aws:iam::123456789012:role/MyServiceRole'));
+          console.log(chalk.yellow('GovCloud Format: arn:aws-us-gov:iam::ACCOUNT_ID:role/ROLE_NAME'));
+          console.log('\nTo find your role ARN:');
+          console.log('1. Go to AWS IAM Console');
+          console.log('2. Navigate to Roles');
+          console.log('3. Select your role');
+          console.log('4. Copy the ARN shown in the summary');
+          console.log('\nNote: You need permission to assume this role');
+          return false; // Keep prompting
+        }
+        return /^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[\w+=,.@-]+$/.test(input) 
+          ? true 
+          : 'Please enter a valid IAM role ARN (both standard and GovCloud ARNs are supported)';
+      }
     },
     {
       type: 'input',
@@ -408,7 +439,14 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
   let credentials;
   
   // If method is not specified, prompt for it
-  if (!method || method === 'interactive') {
+  if (!method || method === 'interactive' || method === '?') {
+    console.log(chalk.yellow('Available credential methods:'));
+    console.log('- access-keys: Direct AWS access key and secret key');
+    console.log('- profile: Named profile from your AWS config file');
+    console.log('- role: Assume an IAM role (requires source credentials)');
+    console.log('- web-identity: Web identity federation');
+    console.log('- ec2-instance-metadata: Use EC2 instance roles');
+    
     const answers = await inquirer.prompt([
       {
         type: 'list',
