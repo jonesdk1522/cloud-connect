@@ -312,12 +312,23 @@ async function configureEC2InstanceMetadata() {
       name: 'isGovCloud',
       message: 'Is this for GovCloud?',
       default: false
+    },
+    {
+      type: 'list',
+      name: 'govCloudRegion',
+      message: 'Which GovCloud region?',
+      choices: [
+        { name: 'US-Gov West (us-gov-west-1)', value: 'us-gov-west-1' },
+        { name: 'US-Gov East (us-gov-east-1)', value: 'us-gov-east-1' }
+      ],
+      when: answers => answers.isGovCloud
     }
   ]);
   
   return {
     method: 'ec2-instance-metadata',
-    isGovCloud: answers.isGovCloud
+    isGovCloud: answers.isGovCloud,
+    govCloudRegion: answers.isGovCloud ? answers.govCloudRegion : undefined
   };
 }
 
@@ -325,7 +336,9 @@ async function configureEC2InstanceMetadata() {
 export async function testCredentials(credentials) {
   try {
     const provider = createCredentialProvider(credentials);
-    const region = credentials.isGovCloud ? 'us-gov-west-1' : 'us-east-1';
+    const region = credentials.isGovCloud 
+      ? (credentials.govCloudRegion || 'us-gov-west-1')
+      : 'us-east-1';
     
     // Create an STS client with the credentials
     const sts = new STSClient({
@@ -369,6 +382,11 @@ export function createCredentialProvider(config) {
     return fromEnv();
   }
   
+  // Determine the appropriate region based on config
+  const region = config.isGovCloud 
+    ? (config.govCloudRegion || 'us-gov-west-1') // Use specified GovCloud region or default to west
+    : 'us-east-1';
+  
   switch (config.method) {
     case 'access-keys':
       // Create credentials directly from access keys
@@ -406,7 +424,7 @@ export function createCredentialProvider(config) {
           RoleSessionName: config.sessionName || 'cloud-connect-session'
         },
         clientConfig: {
-          region: config.isGovCloud ? 'us-gov-west-1' : 'us-east-1'
+          region: region
         },
         credentials: sourceProvider
       });
@@ -423,7 +441,8 @@ export function createCredentialProvider(config) {
       // Use EC2 instance metadata service
       return fromInstanceMetadata({
         timeout: 5000, // 5 seconds timeout
-        maxRetries: 3
+        maxRetries: 3,
+        region: region
       });
       
     default:
