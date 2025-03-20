@@ -309,9 +309,16 @@ async function configureEC2InstanceMetadata() {
   const answers = await inquirer.prompt([
     {
       type: 'confirm',
+      name: 'useCurrentRegion',
+      message: 'Use current EC2 instance region (recommended)?',
+      default: true
+    },
+    {
+      type: 'confirm',
       name: 'isGovCloud',
       message: 'Is this for GovCloud?',
-      default: false
+      default: false,
+      when: answers => !answers.useCurrentRegion
     },
     {
       type: 'list',
@@ -321,21 +328,15 @@ async function configureEC2InstanceMetadata() {
         { name: 'US-Gov West (us-gov-west-1)', value: 'us-gov-west-1' },
         { name: 'US-Gov East (us-gov-east-1)', value: 'us-gov-east-1' }
       ],
-      when: answers => answers.isGovCloud
-    },
-    {
-      type: 'confirm',
-      name: 'useCurrentRegion',
-      message: 'Use current instance region for validation?',
-      default: true
+      when: answers => !answers.useCurrentRegion && answers.isGovCloud
     }
   ]);
   
   return {
     method: 'ec2-instance-metadata',
-    isGovCloud: answers.isGovCloud,
-    govCloudRegion: answers.isGovCloud ? answers.govCloudRegion : undefined,
-    useCurrentRegion: answers.useCurrentRegion
+    useCurrentRegion: answers.useCurrentRegion,
+    isGovCloud: answers.useCurrentRegion ? false : (answers.isGovCloud || false),
+    govCloudRegion: (!answers.useCurrentRegion && answers.isGovCloud) ? answers.govCloudRegion : undefined
   };
 }
 
@@ -345,13 +346,12 @@ export async function testCredentials(credentials) {
     const provider = createCredentialProvider(credentials);
     
     // Determine the region to use for validation
-    let region;
+    let region = undefined; // Default to auto-detect
     
-    if (credentials.useCurrentRegion && credentials.method === 'ec2-instance-metadata') {
-      // For EC2 instance metadata, we'll use the instance's region by not specifying one
-      // This allows AWS SDK to use the region from the instance metadata
+    if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
+      // For EC2 instance metadata, we'll use the instance's region
       console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-      region = undefined; // Let the SDK auto-detect it
+      // Leave region as undefined to let SDK auto-detect
     } else {
       // Otherwise use the configured region
       region = credentials.isGovCloud 
@@ -361,8 +361,8 @@ export async function testCredentials(credentials) {
     
     // Create an STS client with the credentials
     const sts = new STSClient({
-      region,
-      credentials: provider
+      credentials: provider,
+      region
     });
     
     // Test the credentials by calling GetCallerIdentity
@@ -404,11 +404,12 @@ export function createCredentialProvider(config) {
     return fromEnv();
   }
   
-  // For EC2 instance metadata, we should use the current region if requested
+  // For EC2 instance metadata with current region
   if (config.method === 'ec2-instance-metadata' && config.useCurrentRegion) {
-    // Use EC2 instance metadata service with auto-detected region
+    console.log(chalk.blue('Using EC2 instance metadata with auto-detected region'));
+    // Don't specify region to allow auto-detection from instance metadata
     return fromInstanceMetadata({
-      timeout: 5000, // 5 seconds timeout
+      timeout: 5000, 
       maxRetries: 3
     });
   }
