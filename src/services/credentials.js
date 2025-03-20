@@ -6,7 +6,8 @@ import {
   fromEnv,
   fromIni,
   fromTemporaryCredentials,
-  fromWebToken
+  fromWebToken,
+  fromInstanceMetadata
 } from '@aws-sdk/credential-providers';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
@@ -269,6 +270,26 @@ async function configureWebIdentity() {
   };
 }
 
+// Configure EC2 instance metadata credentials
+async function configureEC2InstanceMetadata() {
+  console.log(chalk.yellow('This method uses credentials from the EC2 Instance Metadata Service.'));
+  console.log(chalk.yellow('This option only works when running on an EC2 instance.'));
+  
+  const answers = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'isGovCloud',
+      message: 'Is this for GovCloud?',
+      default: false
+    }
+  ]);
+  
+  return {
+    method: 'ec2-instance-metadata',
+    isGovCloud: answers.isGovCloud
+  };
+}
+
 // Test credentials
 export async function testCredentials(credentials) {
   try {
@@ -367,6 +388,13 @@ export function createCredentialProvider(config) {
         webIdentityToken: fs.readFileSync(config.tokenFile, 'utf8')
       });
       
+    case 'ec2-instance-metadata':
+      // Use EC2 instance metadata service
+      return fromInstanceMetadata({
+        timeout: 5000, // 5 seconds timeout
+        maxRetries: 3
+      });
+      
     default:
       // Default fallback to environment
       return fromEnv();
@@ -390,7 +418,8 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
           { name: 'AWS Access Keys', value: 'access-keys' },
           { name: 'AWS Profile', value: 'profile' },
           { name: 'IAM Role', value: 'role' },
-          { name: 'Web Identity', value: 'web-identity' }
+          { name: 'Web Identity', value: 'web-identity' },
+          { name: 'EC2 Instance Metadata', value: 'ec2-instance-metadata' }
         ]
       }
     ]);
@@ -410,6 +439,9 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
       break;
     case 'web-identity':
       credentials = await configureWebIdentity();
+      break;
+    case 'ec2-instance-metadata':
+      credentials = await configureEC2InstanceMetadata();
       break;
     default:
       throw new Error(`Unknown credential method: ${method}`);
