@@ -322,13 +322,20 @@ async function configureEC2InstanceMetadata() {
         { name: 'US-Gov East (us-gov-east-1)', value: 'us-gov-east-1' }
       ],
       when: answers => answers.isGovCloud
+    },
+    {
+      type: 'confirm',
+      name: 'useCurrentRegion',
+      message: 'Use current instance region for validation?',
+      default: true
     }
   ]);
   
   return {
     method: 'ec2-instance-metadata',
     isGovCloud: answers.isGovCloud,
-    govCloudRegion: answers.isGovCloud ? answers.govCloudRegion : undefined
+    govCloudRegion: answers.isGovCloud ? answers.govCloudRegion : undefined,
+    useCurrentRegion: answers.useCurrentRegion
   };
 }
 
@@ -336,9 +343,21 @@ async function configureEC2InstanceMetadata() {
 export async function testCredentials(credentials) {
   try {
     const provider = createCredentialProvider(credentials);
-    const region = credentials.isGovCloud 
-      ? (credentials.govCloudRegion || 'us-gov-west-1')
-      : 'us-east-1';
+    
+    // Determine the region to use for validation
+    let region;
+    
+    if (credentials.useCurrentRegion && credentials.method === 'ec2-instance-metadata') {
+      // For EC2 instance metadata, we'll use the instance's region by not specifying one
+      // This allows AWS SDK to use the region from the instance metadata
+      console.log(chalk.yellow('Using current EC2 instance region for validation...'));
+      region = undefined; // Let the SDK auto-detect it
+    } else {
+      // Otherwise use the configured region
+      region = credentials.isGovCloud 
+        ? (credentials.govCloudRegion || 'us-gov-west-1')
+        : 'us-east-1';
+    }
     
     // Create an STS client with the credentials
     const sts = new STSClient({
@@ -355,17 +374,20 @@ export async function testCredentials(credentials) {
     console.log(chalk.cyan(`User ID: ${identity.UserId}`));
     console.log(chalk.cyan(`ARN: ${identity.Arn}`));
     
-    // Also test if they can list EC2 regions (common permission)
-    try {
-      const ec2 = new EC2Client({
-        region,
-        credentials: provider
-      });
-      
-      await ec2.send(new DescribeRegionsCommand({ MaxResults: 1 }));
-      console.log(chalk.green('✅ EC2 permissions confirmed (DescribeRegions)'));
-    } catch (error) {
-      console.log(chalk.yellow('⚠️ EC2 permissions check failed. You may not have EC2 access.'));
+    // For EC2 validation, only try EC2 test if user didn't request useCurrentRegion
+    if (!(credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion)) {
+      // Also test if they can list EC2 regions (common permission)
+      try {
+        const ec2 = new EC2Client({
+          region,
+          credentials: provider
+        });
+        
+        await ec2.send(new DescribeRegionsCommand({ MaxResults: 1 }));
+        console.log(chalk.green('✅ EC2 permissions confirmed (DescribeRegions)'));
+      } catch (error) {
+        console.log(chalk.yellow('⚠️ EC2 permissions check failed. You may not have EC2 access.'));
+      }
     }
     
     return true;
@@ -382,9 +404,18 @@ export function createCredentialProvider(config) {
     return fromEnv();
   }
   
-  // Determine the appropriate region based on config
+  // For EC2 instance metadata, we should use the current region if requested
+  if (config.method === 'ec2-instance-metadata' && config.useCurrentRegion) {
+    // Use EC2 instance metadata service with auto-detected region
+    return fromInstanceMetadata({
+      timeout: 5000, // 5 seconds timeout
+      maxRetries: 3
+    });
+  }
+  
+  // Otherwise determine the appropriate region based on config
   const region = config.isGovCloud 
-    ? (config.govCloudRegion || 'us-gov-west-1') // Use specified GovCloud region or default to west
+    ? (config.govCloudRegion || 'us-gov-west-1')
     : 'us-east-1';
   
   switch (config.method) {
@@ -438,7 +469,7 @@ export function createCredentialProvider(config) {
       });
       
     case 'ec2-instance-metadata':
-      // Use EC2 instance metadata service
+      // Use EC2 instance metadata service with specified region
       return fromInstanceMetadata({
         timeout: 5000, // 5 seconds timeout
         maxRetries: 3,
