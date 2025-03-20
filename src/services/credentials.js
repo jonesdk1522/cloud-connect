@@ -145,9 +145,9 @@ async function configureRole() {
       type: 'input',
       name: 'roleArn',
       message: 'Enter the IAM role ARN to assume:',
-      validate: input => /^arn:aws(-[a-z]+)?:iam::\d{12}:role\/[\w+=,.@-]+$/.test(input) 
+      validate: input => /^arn:(aws|aws-us-gov|aws-cn):iam::\d{12}:role\/[\w+=,.@-]+$/.test(input) 
         ? true 
-        : 'Please enter a valid IAM role ARN'
+        : 'Please enter a valid IAM role ARN (both standard and GovCloud ARNs are supported)'
     },
     {
       type: 'input',

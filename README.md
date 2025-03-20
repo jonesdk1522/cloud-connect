@@ -23,6 +23,15 @@ A collection of network diagnostic tools and AWS network infrastructure manageme
 - [Required IAM Permissions](#required-iam-permissions)
 - [AWS GovCloud Regions](#aws-govcloud-regions)
 - [Direct Execution](#direct-execution)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+    - [AWS Credential Errors](#aws-credential-errors)
+    - [Go Build Errors](#go-build-errors)
+    - [Network Tool Failures](#network-tool-failures)
+  - [Debug Mode](#debug-mode)
+- [Version History](#version-history)
+- [Quick Start](#quick-start)
+- [Support & Contact](#support--contact)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -324,6 +333,76 @@ cloud-connect vpc-details --all-regions
 cloud-connect snapshot --name baseline
 cloud-connect compare-snapshots baseline latest
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+#### AWS Credential Errors
+- **Issue**: "Unable to locate credentials"
+  - **Solution**: Run `aws configure` or set up credentials in `~/.aws/credentials`
+- **Issue**: "Access Denied" errors
+  - **Solution**: Verify your IAM permissions match those listed in [Required IAM Permissions](#required-iam-permissions)
+
+#### Go Build Errors
+- **Issue**: "Command 'go' not found"
+  - **Solution**: Install Go using your package manager or from [golang.org](https://golang.org/doc/install)
+- **Issue**: Build fails with dependency errors
+  - **Solution**: Run `go mod tidy` in the project directory before building
+
+#### Network Tool Failures
+- **Issue**: Tools appear installed but fail to run
+  - **Solution**: Ensure the build script completed successfully and try running `./build.sh` again
+
+### Debug Mode
+
+Run any command with `--debug` for additional logging information:
+```bash
+cloud-connect vpc-details --vpc vpc-12345678 --debug
+```
+
+## Version History
+
+### v1.0.0 (Latest)
+- Initial public release
+- Support for all AWS networking components
+- Network diagnostic tools
+- Snapshot and comparison capabilities
+
+### v0.9.0 (Beta)
+- Preview release with core functionality
+- Limited snapshot capabilities
+
+## Quick Start
+
+For new users, here's how to get started quickly:
+
+1. Install the tool:
+   ```bash
+   ./install.sh
+   ```
+
+2. Run a basic network diagnostic:
+   ```bash
+   cloud-connect test-connectivity google.com
+   ```
+
+3. List your AWS VPCs:
+   ```bash
+   cloud-connect vpcs
+   ```
+
+4. Take your first snapshot:
+   ```bash
+   cloud-connect snapshot --name initial
+   ```
+
+## Support & Contact
+
+- **GitHub Issues**: Please report bugs via the project's issue tracker
+- **Email Support**: cloud-connect-support@example.com
+- **Documentation**: Full documentation is available at [docs.cloudconnect-tools.com](https://docs.cloudconnect-tools.com)
+- **Slack Community**: Join our community at [cloudconnect.slack.com](https://cloudconnect.slack.com)
 
 ## Contributing
 
