@@ -49,6 +49,19 @@ export async function saveCredentials(credentials, method) {
     delete safeCredentials.sourceCredentials;
   }
   
+  // Log what we're saving
+  console.log(chalk.blue('Saving credential configuration:'));
+  console.log(chalk.blue(`- Method: ${method}`));
+  if (method === 'ec2-instance-metadata') {
+    console.log(chalk.blue(`- Use current region: ${credentials.useCurrentRegion}`));
+    if (!credentials.useCurrentRegion) {
+      console.log(chalk.blue(`- Is GovCloud: ${credentials.isGovCloud}`));
+      if (credentials.isGovCloud) {
+        console.log(chalk.blue(`- GovCloud region: ${credentials.govCloudRegion}`));
+      }
+    }
+  }
+  
   await fs.writeFile(
     CREDENTIALS_FILE,
     JSON.stringify(safeCredentials, null, 2),
@@ -343,6 +356,7 @@ async function configureEC2InstanceMetadata() {
 // Test credentials
 export async function testCredentials(credentials) {
   try {
+    console.log(chalk.yellow('Creating credential provider...'));
     const provider = createCredentialProvider(credentials);
     
     // Determine the region to use for validation
@@ -357,6 +371,7 @@ export async function testCredentials(credentials) {
       region = credentials.isGovCloud 
         ? (credentials.govCloudRegion || 'us-gov-west-1')
         : 'us-east-1';
+      console.log(chalk.yellow(`Using region ${region} for validation...`));
     }
     
     // Create an STS client with the credentials
@@ -404,14 +419,37 @@ export function createCredentialProvider(config) {
     return fromEnv();
   }
   
+  console.log(chalk.blue(`Creating credential provider using method: ${config.method}`));
+  
   // For EC2 instance metadata with current region
-  if (config.method === 'ec2-instance-metadata' && config.useCurrentRegion) {
-    console.log(chalk.blue('Using EC2 instance metadata with auto-detected region'));
-    // Don't specify region to allow auto-detection from instance metadata
-    return fromInstanceMetadata({
-      timeout: 5000, 
-      maxRetries: 3
-    });
+  if (config.method === 'ec2-instance-metadata') {
+    console.log(chalk.blue('Using EC2 instance metadata credentials'));
+    
+    if (config.useCurrentRegion) {
+      console.log(chalk.blue('Using auto-detected region from EC2 instance metadata'));
+      
+      // Explicitly disable profile loading to prevent fallback to ~/.aws/credentials
+      return fromInstanceMetadata({
+        timeout: 5000, 
+        maxRetries: 3,
+        ignoreCache: true, // Don't use cached credentials
+        profile: '' // Empty profile to prevent loading from ~/.aws/credentials
+      });
+    } else {
+      // Using specified region
+      const region = config.isGovCloud 
+        ? (config.govCloudRegion || 'us-gov-west-1')
+        : 'us-east-1';
+      console.log(chalk.blue(`Using specified region: ${region}`));
+      
+      return fromInstanceMetadata({
+        timeout: 5000,
+        maxRetries: 3,
+        region: region,
+        ignoreCache: true,
+        profile: ''
+      });
+    }
   }
   
   // Otherwise determine the appropriate region based on config
