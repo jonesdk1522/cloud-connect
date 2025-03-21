@@ -367,11 +367,15 @@ export async function testCredentials(credentials) {
     const provider = createCredentialProvider(credentials);
     
     let region;
+    let regionFromMetadata = null;
     
+    // Only fetch the region directly if we're not going to get it from the credential provider
     if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
       try {
         console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-        region = await getEC2Region();
+        // Store the region for later use with the credential provider
+        regionFromMetadata = await getEC2Region();
+        region = regionFromMetadata;
       } catch (error) {
         console.log(chalk.yellow(`Failed to get EC2 region: ${error.message}`));
         console.log(chalk.yellow('Falling back to default region...'));
@@ -390,7 +394,8 @@ export async function testCredentials(credentials) {
     let resolvedCredentials;
     try {
       if (typeof provider === 'function') {
-        resolvedCredentials = await provider();
+        // Pass the already fetched region to avoid double fetching
+        resolvedCredentials = await provider(regionFromMetadata);
       } else if (provider && typeof provider.then === 'function') {
         resolvedCredentials = await provider;
       } else {
@@ -588,10 +593,18 @@ export function createCredentialProvider(config) {
     if (config.useCurrentRegion) {
       console.log(chalk.blue('Attempting to detect region from EC2 instance metadata...'));
       try {
-        return async () => {
+        // Accept a pre-fetched region to avoid duplicate calls
+        return async (preFetchedRegion) => {
           try {
-            const detectedRegion = await getEC2Region();
-            console.log(chalk.green(`Successfully detected region from metadata: ${detectedRegion}`));
+            // Use the pre-fetched region if available
+            const detectedRegion = preFetchedRegion || await getEC2Region();
+            
+            // Only log if we had to fetch it again
+            if (!preFetchedRegion) {
+              console.log(chalk.green(`Successfully detected region from metadata: ${detectedRegion}`));
+            } else {
+              console.log(chalk.blue(`Using pre-fetched region: ${detectedRegion}`));
+            }
             
             return fromInstanceMetadata({
               timeout: 10000,
