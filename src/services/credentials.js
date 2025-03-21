@@ -369,8 +369,16 @@ export async function testCredentials(credentials) {
     let region;
     
     if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
-      console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-      region = await getEC2Region();
+      try {
+        console.log(chalk.yellow('Using current EC2 instance region for validation...'));
+        region = await getEC2Region();
+      } catch (error) {
+        console.log(chalk.yellow(`Failed to get EC2 region: ${error.message}`));
+        console.log(chalk.yellow('Falling back to default region...'));
+        region = credentials.isGovCloud 
+          ? (credentials.govCloudRegion || 'us-gov-west-1')
+          : 'us-east-1';
+      }
     } else {
       region = credentials.isGovCloud 
         ? (credentials.govCloudRegion || 'us-gov-west-1')
@@ -378,36 +386,67 @@ export async function testCredentials(credentials) {
       console.log(chalk.yellow(`Using region ${region} for validation...`));
     }
     
+    // Resolve credentials from the provider
+    let resolvedCredentials;
+    try {
+      if (typeof provider === 'function') {
+        resolvedCredentials = await provider();
+      } else if (provider && typeof provider.then === 'function') {
+        resolvedCredentials = await provider;
+      } else {
+        resolvedCredentials = provider;
+      }
+      
+      if (!resolvedCredentials || typeof resolvedCredentials !== 'object') {
+        throw new Error('Credential provider did not return valid credentials');
+      }
+    } catch (error) {
+      console.log(chalk.red(`Failed to resolve credentials: ${error.message}`));
+      return false;
+    }
+    
+    // Create STS client with resolved credentials
     const sts = new STSClient({
-      credentials: provider,
+      credentials: resolvedCredentials,
       region
     });
     
-    console.log(chalk.yellow('Testing credentials...'));
-    const identity = await sts.send(new GetCallerIdentityCommand({}));
-    
-    console.log(chalk.green('✅ Credentials are valid!'));
-    console.log(chalk.cyan(`Account: ${identity.Account}`));
-    console.log(chalk.cyan(`User ID: ${identity.UserId}`));
-    console.log(chalk.cyan(`ARN: ${identity.Arn}`));
-    
-    if (!(credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion)) {
-      try {
-        const ec2 = new EC2Client({
-          region,
-          credentials: provider
-        });
-        
-        await ec2.send(new DescribeRegionsCommand({ MaxResults: 1 }));
-        console.log(chalk.green('✅ EC2 permissions confirmed (DescribeRegions)'));
-      } catch (error) {
-        console.log(chalk.yellow('⚠️ EC2 permissions check failed. You may not have EC2 access.'));
+    console.log(chalk.yellow('Testing credentials with STS GetCallerIdentity...'));
+    try {
+      const identity = await sts.send(new GetCallerIdentityCommand({}));
+      
+      console.log(chalk.green('✅ Credentials are valid!'));
+      console.log(chalk.cyan(`Account: ${identity.Account}`));
+      console.log(chalk.cyan(`User ID: ${identity.UserId}`));
+      console.log(chalk.cyan(`ARN: ${identity.Arn}`));
+      
+      // Test EC2 permissions only if not using instance metadata with current region
+      if (!(credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion)) {
+        try {
+          const ec2 = new EC2Client({
+            region,
+            credentials: resolvedCredentials
+          });
+          
+          await ec2.send(new DescribeRegionsCommand({ MaxResults: 1 }));
+          console.log(chalk.green('✅ EC2 permissions confirmed (DescribeRegions)'));
+        } catch (error) {
+          console.log(chalk.yellow(`⚠️ EC2 permissions check failed: ${error.message}`));
+          console.log(chalk.yellow('You may not have EC2 access, but credential validation succeeded.'));
+        }
       }
+      
+      return true;
+    } catch (error) {
+      console.log(chalk.red(`❌ STS validation failed: ${error.message}`));
+      if (error.Code) {
+        console.log(chalk.red(`Error code: ${error.Code}`));
+      }
+      return false;
     }
-    
-    return true;
   } catch (error) {
     console.log(chalk.red(`❌ Credential validation failed: ${error.message}`));
+    console.log(chalk.red('Stack trace:', error.stack));
     return false;
   }
 }

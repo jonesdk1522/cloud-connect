@@ -1,4 +1,4 @@
-import { testConnectivity } from './src/connectivity.js';
+import { testConnectivity } from '../src/connectivity.js';
 
 async function runTests() {
   try {
