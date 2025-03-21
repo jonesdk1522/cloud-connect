@@ -373,7 +373,6 @@ export async function testCredentials(credentials) {
     if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
       try {
         console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-        // Store the region for later use with the credential provider
         regionFromMetadata = await getEC2Region();
         region = regionFromMetadata;
       } catch (error) {
@@ -412,13 +411,29 @@ export async function testCredentials(credentials) {
         resolvedCredentials = provider;
       }
       
-      // Validate the credentials have the necessary properties
+      // Handle the case where we might get yet another function from the SDK
+      if (typeof resolvedCredentials === 'function') {
+        console.log(chalk.yellow('Resolving final credential provider function...'));
+        resolvedCredentials = await resolvedCredentials();
+      }
+      
+      // For AWS SDK v3, the credential object structure should have these properties
       if (!resolvedCredentials || 
           typeof resolvedCredentials !== 'object' ||
           !resolvedCredentials.accessKeyId || 
           !resolvedCredentials.secretAccessKey) {
-        console.log(chalk.red('Invalid credential format:'), resolvedCredentials);
-        throw new Error('Credential provider did not return valid credentials');
+        
+        // One more attempt for AWS SDK v3 format
+        if (resolvedCredentials && typeof resolvedCredentials.getCredentials === 'function') {
+          console.log(chalk.yellow('Getting credentials from provider object...'));
+          resolvedCredentials = await resolvedCredentials.getCredentials();
+        } else {
+          console.log(chalk.red('Invalid credential format:'), 
+            typeof resolvedCredentials === 'object' ? 
+              JSON.stringify(Object.keys(resolvedCredentials)) : 
+              typeof resolvedCredentials);
+          throw new Error('Credential provider did not return valid credentials');
+        }
       }
       
       console.log(chalk.green('Successfully resolved credentials'));
@@ -477,7 +492,7 @@ export async function testCredentials(credentials) {
 }
 
 // Function to get EC2 instance region from metadata service
-function getEC2Region() {
+export function getEC2Region() {
   return new Promise((resolve, reject) => {
     console.log(chalk.blue('Attempting to retrieve region via IMDSv2...'));
     

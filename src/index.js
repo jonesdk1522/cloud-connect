@@ -17,7 +17,7 @@ program
 
 // Global options
 program
-  .option('-r, --region <region>', 'AWS region', 'us-east-1')
+  .option('-r, --region [region]', 'AWS region (defaults to auto-detect)')
   .option('-g, --gov-cloud', 'Use AWS GovCloud regions');
 
 // VPC commands
@@ -25,7 +25,7 @@ program
   .command('vpcs')
   .description('List all VPCs')
   .action(async (options, command) => {
-    const region = getRegion(command.parent.opts().region, command.parent.opts().govCloud);
+    const region = command.parent.opts().region || undefined; // Pass undefined to use auto-detection
     const isGovCloud = command.parent.opts().govCloud;
     try {
       await commands.listVPCs(region, isGovCloud);
@@ -393,16 +393,29 @@ program
   });
 
 // Helper function to adjust region for GovCloud
-function getRegion(region, isGovCloud) {
-  // If GovCloud is specified but the region doesn't look like a GovCloud region
-  if (isGovCloud && !region.startsWith('us-gov-')) {
-    if (region === 'us-east-1' || region === 'us-east-2') {
-      return 'us-gov-east-1'; // Default to East GovCloud
-    } else {
-      return 'us-gov-west-1'; // Default to West GovCloud
+function getRegion(specifiedRegion, isGovCloud) {
+  // If user explicitly specified a region via flag, use that
+  if (specifiedRegion && specifiedRegion !== 'us-east-1') {
+    // GovCloud check logic remains the same
+    if (isGovCloud && !specifiedRegion.startsWith('us-gov-')) {
+      return specifiedRegion === 'us-east-1' || specifiedRegion === 'us-east-2' 
+        ? 'us-gov-east-1' 
+        : 'us-gov-west-1';
     }
+    return specifiedRegion;
   }
-  return region;
+  
+  // Try to get region from environment variables
+  const envRegion = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
+  if (envRegion) {
+    console.log(chalk.blue(`Using region from environment: ${envRegion}`));
+    return envRegion;
+  }
+  
+  // Fall back to default region for synchronous code path
+  // The async detection will happen in createEC2ClientAsync if needed
+  console.log(chalk.yellow(`No region detected, using default: us-east-1`));
+  return 'us-east-1';
 }
 
 // Add a general help message
@@ -428,4 +441,24 @@ Credentials:
 `);
 
 // Parse arguments and execute
-program.parse(process.argv);
+(async () => {
+  try {
+    // Preload credentials before any command runs
+    const { applyCredentialsToClients } = await import('./aws/client.js');
+    
+    console.log(chalk.blue('Initializing AWS credentials...'));
+    await applyCredentialsToClients();
+    
+    // Show help if no arguments provided
+    if (process.argv.length <= 2) {
+      program.help();
+      return;
+    }
+    
+    // Now parse and execute commands
+    program.parse(process.argv);
+  } catch (error) {
+    console.error(chalk.red(`Fatal error: ${error.message}`));
+    process.exit(1);
+  }
+})();

@@ -1,8 +1,10 @@
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
 import chalk from 'chalk';
+import { fromIni } from '@aws-sdk/credential-providers';
 import { 
   loadCredentials, 
-  createCredentialProvider
+  createCredentialProvider,
+  getEC2Region
 } from '../services/credentials.js';
 
 // Client cache to avoid creating redundant clients
@@ -10,137 +12,184 @@ const clientCache = new Map();
 
 /**
  * Creates or returns a cached AWS EC2 client
- * @param {string} region - AWS region
- * @param {boolean} isGovCloud - Whether to use GovCloud endpoints
- * @returns {EC2Client} - AWS EC2 client instance
  */
 export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
-  // Normalize region based on GovCloud flag
-  let effectiveRegion = region;
-  
-  // Handle GovCloud regions
-  if (isGovCloud || region.startsWith('us-gov-')) {
+  // For GovCloud profiles, ensure we're using a GovCloud region
+  if (process.env.AWS_PROFILE && process.env.AWS_PROFILE.toLowerCase().includes('gov')) {
     isGovCloud = true;
-    
     if (!region.startsWith('us-gov-')) {
-      effectiveRegion = region.includes('east') ? 'us-gov-east-1' : 'us-gov-west-1';
-      console.warn(chalk.yellow(`Converting ${region} to GovCloud region: ${effectiveRegion}`));
+      region = 'us-gov-west-1';
+      console.log(chalk.yellow(`GovCloud profile detected, using region: ${region}`));
     }
   }
   
-  // Create a cache key that accounts for both region and GovCloud status
-  const cacheKey = `${effectiveRegion}-${isGovCloud}`;
+  // If GovCloud flag is set, ensure we're using a GovCloud region
+  if (isGovCloud && !region.startsWith('us-gov-')) {
+    region = 'us-gov-west-1';
+    console.log(chalk.yellow(`GovCloud mode enabled, using region: ${region}`));
+  }
+  
+  // Create a cache key based on region and GovCloud flag
+  const cacheKey = `${region}-${isGovCloud}`;
   
   // Return cached client if available
   if (clientCache.has(cacheKey)) {
     return clientCache.get(cacheKey);
   }
   
-  try {
-    // We'll handle credentials synchronously to maintain compatibility
-    // with existing code. For custom credentials, they'll be applied next time
-    // the application runs after configuration.
-    
-    // Fix: Use correct retry configuration format per AWS SDK v3
-    const client = new EC2Client({
-      region: effectiveRegion,
-      maxAttempts: 3,
-      retryMode: 'standard'
-    });
-    
-    // Cache the client for future use
-    clientCache.set(cacheKey, client);
-    return client;
-  } catch (error) {
-    if (error.message.includes('credentials') || error.name === 'CredentialsProviderError') {
-      if (isGovCloud) {
-        throw new Error(`AWS GovCloud authentication failed for region ${effectiveRegion}. Make sure you have valid GovCloud credentials configured.`);
-      } else {
-        throw new Error(`AWS authentication failed for region ${effectiveRegion}. Make sure you have valid credentials configured.`);
-      }
-    }
-    throw error;
-  }
-};
+  // If region is not specified (undefined or empty), use us-east-1 or us-gov-west-1 for GovCloud
+  const effectiveRegion = (!region || region === '') 
+    ? (isGovCloud ? 'us-gov-west-1' : 'us-east-1') 
+    : region;
 
-/**
- * Creates an AWS EC2 client with custom credentials
- * This is used by credential commands but not for regular operations
- * to avoid breaking existing code
- */
-export const createEC2ClientWithCredentials = async (region = 'us-east-1', isGovCloud = false) => {
-  // Normalize region based on GovCloud flag
-  let effectiveRegion = region;
+  console.log(chalk.blue(`Creating AWS client for region: ${effectiveRegion}`));
+
+  // Create config for the client
+  const clientConfig = { region: effectiveRegion };
   
-  // Handle GovCloud regions
-  if (isGovCloud || region.startsWith('us-gov-')) {
-    isGovCloud = true;
-    
-    if (!region.startsWith('us-gov-')) {
-      effectiveRegion = region.includes('east') ? 'us-gov-east-1' : 'us-gov-west-1';
-    }
+  // Add credentials to config if we have environment variables
+  if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+    console.log(chalk.green('Using access key credentials from environment variables'));
+    clientConfig.credentials = {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: process.env.AWS_SESSION_TOKEN
+    };
+  } 
+  // Use profile if specified
+  else if (process.env.AWS_PROFILE) {
+    console.log(chalk.green(`Using credentials from AWS profile: ${process.env.AWS_PROFILE}`));
+    clientConfig.credentials = fromIni({
+      profile: process.env.AWS_PROFILE,
+      // For GovCloud profiles, explicitly set the region to match
+      region: effectiveRegion
+    });
+  }
+  // No explicit credentials
+  else {
+    console.log(chalk.yellow('Using default AWS credential provider chain'));
   }
   
-  try {
-    // Load configured credentials
-    const savedCredentials = await loadCredentials();
-    let credentials = undefined;
-    
-    if (savedCredentials) {
-      // Override isGovCloud if specified in saved credentials
-      if (savedCredentials.isGovCloud) {
-        isGovCloud = true;
-        if (!effectiveRegion.startsWith('us-gov-')) {
-          effectiveRegion = effectiveRegion.includes('east') ? 'us-gov-east-1' : 'us-gov-west-1';
-        }
-      }
-      
-      // Create credential provider from saved configuration
-      credentials = createCredentialProvider(savedCredentials);
-    }
-    
-    return new EC2Client({
-      region: effectiveRegion,
-      maxAttempts: 3,
-      retryMode: 'standard',
-      credentials
-    });
-  } catch (error) {
-    if (error.message.includes('credentials') || error.name === 'CredentialsProviderError') {
-      if (isGovCloud) {
-        throw new Error(`AWS GovCloud authentication failed for region ${effectiveRegion}. Make sure you have valid GovCloud credentials configured.`);
-      } else {
-        throw new Error(`AWS authentication failed for region ${effectiveRegion}. Make sure you have valid credentials configured.`);
-      }
-    }
-    throw error;
-  }
+  // Create the client with proper config
+  const client = new EC2Client(clientConfig);
+  clientCache.set(cacheKey, client);
+  return client;
 };
 
-// Use credentials for future client creation (called after configuration)
+// Use credentials for future client creation
 export const applyCredentialsToClients = async () => {
   try {
-    // Clear existing cache to force recreation with new credentials
+    // Clear cache to force credential refresh
     clientCache.clear();
     
-    // Load saved credentials for future client creation
+    // First check existing environment variables (highest priority)
+    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+      console.log(chalk.green('✅ Using existing AWS access key credentials from environment'));
+      return true;
+    }
+    
+    // Then check for saved credentials in our config
     const savedCredentials = await loadCredentials();
     if (savedCredentials) {
-      console.log(chalk.green('Loaded saved AWS credentials'));
+      console.log(chalk.green(`Found saved credentials (${savedCredentials.method})`));
+      
+      // For access-keys method, set environment variables
+      if (savedCredentials.method === 'access-keys') {
+        process.env.AWS_ACCESS_KEY_ID = savedCredentials.accessKeyId;
+        process.env.AWS_SECRET_ACCESS_KEY = savedCredentials.secretAccessKey;
+        if (savedCredentials.sessionToken) {
+          process.env.AWS_SESSION_TOKEN = savedCredentials.sessionToken;
+        }
+        console.log(chalk.green('✅ Set environment variables from saved access keys'));
+        return true;
+      }
+      
+      // For profile method, set AWS_PROFILE
+      if (savedCredentials.method === 'profile') {
+        process.env.AWS_PROFILE = savedCredentials.profile;
+        console.log(chalk.green(`✅ Set AWS_PROFILE to "${savedCredentials.profile}"`));
+        return true;
+      }
+      
+      // For other methods, try to resolve and set as environment variables
+      try {
+        const provider = createCredentialProvider(savedCredentials);
+        const credentials = await resolveCredentials(provider);
+        
+        if (credentials && credentials.accessKeyId && credentials.secretAccessKey) {
+          process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId;
+          process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey;
+          if (credentials.sessionToken) {
+            process.env.AWS_SESSION_TOKEN = credentials.sessionToken;
+          }
+          console.log(chalk.green('✅ Set environment variables from resolved credentials'));
+          return true;
+        }
+      } catch (error) {
+        console.error(chalk.yellow(`Could not resolve credentials: ${error.message}`));
+      }
     }
+    
+    // Existing AWS_PROFILE (already set before this app ran)
+    if (process.env.AWS_PROFILE) {
+      console.log(chalk.green(`✅ Using existing AWS_PROFILE: ${process.env.AWS_PROFILE}`));
+      return true;
+    }
+    
+    console.log(chalk.yellow('No explicit credentials configured - will use default AWS chain'));
     return true;
   } catch (error) {
-    console.error('Error applying credentials:', error);
+    console.error(chalk.red(`Error in applyCredentialsToClients: ${error.message}`));
     return false;
   }
 };
 
+/**
+ * Helper function to fully resolve credential providers to actual credentials
+ * This handles the nested function providers that AWS SDK might return
+ */
+async function resolveCredentials(provider) {
+  if (!provider) return null;
+  
+  try {
+    // If it's a function, call it
+    if (typeof provider === 'function') {
+      const result = await provider();
+      // Check if we got another function
+      if (typeof result === 'function') {
+        return await resolveCredentials(result);
+      }
+      return result;
+    }
+    
+    // If it's a promise, resolve it
+    if (provider && typeof provider.then === 'function') {
+      const result = await provider;
+      // Check if we got another function or promise
+      if (typeof result === 'function' || (result && typeof result.then === 'function')) {
+        return await resolveCredentials(result);
+      }
+      return result;
+    }
+    
+    // If it has a getCredentials method (SDK credential providers)
+    if (provider && typeof provider.getCredentials === 'function') {
+      return await provider.getCredentials();
+    }
+    
+    // Otherwise assume it's already credentials
+    return provider;
+  } catch (error) {
+    console.error(chalk.yellow(`Error resolving credential provider: ${error.message}`));
+    throw error;
+  }
+}
+
 // Get all available AWS regions
 export const getAllRegions = async (includeGovCloud = false) => {
   try {
-    const client = createEC2Client('us-east-1', false);
+    const client = createEC2Client('us-east-1', false); 
     const command = new DescribeRegionsCommand({
-      // Include all regions if we're looking for GovCloud
       AllRegions: includeGovCloud 
     });
     const response = await client.send(command);
@@ -163,7 +212,6 @@ export const getAllRegions = async (includeGovCloud = false) => {
 // Get all GovCloud regions
 export const getGovCloudRegions = async () => {
   try {
-    // Create a client in a GovCloud region
     const client = createEC2Client('us-gov-west-1', true);
     const command = new DescribeRegionsCommand({});
     const response = await client.send(command);
