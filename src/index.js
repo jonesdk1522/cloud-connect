@@ -392,8 +392,38 @@ program
     }
   });
 
+// Add connectivity test command
+program
+  .command('connectivity-test')
+  .description('Test connectivity to EC2 instances')
+  .option('-p, --port <port>', 'Test a specific TCP port')
+  .option('-i, --ip <ip>', 'Test a specific IP address')
+  .action(async (options, command) => {
+    const region = getRegion(command.parent.opts().region, command.parent.opts().govCloud);
+    const isGovCloud = command.parent.opts().govCloud;
+    
+    try {
+      const { testAwsConnectivity, testConnectivity } = await import('../aws-connectivity-test.js');
+      
+      if (options.port && options.ip) {
+        const port = parseInt(options.port);
+        console.log(chalk.cyan(`Testing port ${port} on IP ${options.ip}...`));
+        const result = await testConnectivity(options.ip, {
+          mode: 'tcp',
+          port: port,
+          timeout: 3
+        });
+        console.log(result);
+      } else {
+        await testAwsConnectivity(region, isGovCloud);
+      }
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
 // Helper function to adjust region for GovCloud
-function getRegion(specifiedRegion, isGovCloud) {
+export function getRegion(specifiedRegion, isGovCloud) {
   // If user explicitly specified a region via flag, use that
   if (specifiedRegion && specifiedRegion !== 'us-east-1') {
     // GovCloud check logic remains the same

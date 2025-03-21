@@ -1,11 +1,15 @@
-import { EC2Client, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
+import { DescribeInstancesCommand } from "@aws-sdk/client-ec2";
+import { createEC2Client } from './src/aws/client.js';
 import { testConnectivity } from './src/connectivity.js';
+import { getRegion } from './src/index.js';
+import chalk from 'chalk';
 
-async function getAwsInstances(region = 'us-east-1') {
-  // Initialize EC2 client
-  const ec2Client = new EC2Client({ region });
+export async function getAwsInstances(region, isGovCloud = false) {
+  // Use the common client creation method that handles credentials
+  const ec2Client = createEC2Client(region, isGovCloud);
   
   try {
+    // Get data from AWS
     const data = await ec2Client.send(new DescribeInstancesCommand({}));
     
     // Collect instances details
@@ -31,10 +35,10 @@ async function getAwsInstances(region = 'us-east-1') {
   }
 }
 
-async function testAwsConnectivity(region = 'us-east-1') {
+export async function testAwsConnectivity(region, isGovCloud = false) {
   try {
-    console.log(`Fetching EC2 instances from ${region}...`);
-    const instances = await getAwsInstances(region);
+    console.log(chalk.cyan(`Fetching EC2 instances from ${region}${isGovCloud ? ' (GovCloud)' : ''}...`));
+    const instances = await getAwsInstances(region, isGovCloud);
     
     if (instances.length === 0) {
       console.log("No running instances found in this region.");
@@ -114,19 +118,42 @@ async function testAwsConnectivity(region = 'us-east-1') {
       console.log('\n' + '-'.repeat(50) + '\n');
     }
   } catch (error) {
-    console.error("Failed to test AWS connectivity:", error);
+    console.error(chalk.red("Failed to test AWS connectivity:"), error);
   }
 }
 
-// Allow region to be specified as command line argument
-const region = process.argv[2] || 'us-east-1';
-
-// Allow specific ports to be tested
-const specificPort = parseInt(process.argv[3]);
-if (!isNaN(specificPort)) {
-  const ip = process.argv[4];
-  if (ip) {
-    console.log(`Testing specific port ${specificPort} on IP ${ip}...`);
+// If this file is executed directly (not imported)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  // Detect if we're using a GovCloud profile first
+  const isGovCloud = process.argv.includes('--gov-cloud') || 
+                    (process.env.AWS_PROFILE && process.env.AWS_PROFILE.toLowerCase().includes('gov'));
+  
+  // Get region using the centralized approach - be explicit about GovCloud
+  const region = getRegion(process.argv[2], isGovCloud);
+  
+  // Determine the effective region based on GovCloud status
+  let effectiveRegion = region;
+  if (isGovCloud && !region.startsWith('us-gov-')) {
+    effectiveRegion = 'us-gov-west-1';
+  }
+  
+  console.log(chalk.cyan(`Starting connectivity tests in region: ${effectiveRegion}${isGovCloud ? ' (GovCloud)' : ''}`));
+  
+  // Parse command line for port and IP
+  let specificPort = null;
+  let ip = null;
+  
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (!arg.startsWith('-') && !isNaN(parseInt(arg))) {
+      specificPort = parseInt(arg);
+      ip = process.argv[i + 1];
+      break;
+    }
+  }
+  
+  if (specificPort && ip) {
+    console.log(chalk.cyan(`Testing specific port ${specificPort} on IP ${ip}...`));
     testConnectivity(ip, { 
       mode: 'tcp',
       port: specificPort,
@@ -137,8 +164,10 @@ if (!isNaN(specificPort)) {
       console.error("Test failed:", err);
     });
   } else {
-    testAwsConnectivity(region);
+    // Credentials will be handled by createEC2Client
+    testAwsConnectivity(effectiveRegion, isGovCloud);
   }
-} else {
-  testAwsConnectivity(region);
 }
+
+// Export the test function for use by the CLI
+export { testConnectivity };
