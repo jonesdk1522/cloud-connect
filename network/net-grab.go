@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,18 +47,25 @@ type HostInfo struct {
 }
 
 type Scanner struct {
-	ports    []int
-	timeout  time.Duration
-	maxHosts int
-	results  []HostInfo
-	mu       sync.Mutex
+	ports         []int
+	timeout       time.Duration
+	maxHosts      int
+	results       []HostInfo
+	mu            sync.Mutex
+	verbose       bool
+	liveDisplay   bool
+	hostsScanned  int32 // Atomic counter for progress tracking
+	totalHosts    int   // Total hosts to be scanned
+	progressMutex sync.Mutex
 }
 
-func NewScanner() *Scanner {
+func NewScanner(verbose, liveDisplay bool) *Scanner {
 	return &Scanner{
-		ports:    []int{22, 80, 443, 3389, 8080}, // Common ports
-		timeout:  time.Second * 2,
-		maxHosts: 256,
+		ports:       []int{22, 80, 443, 3389, 8080}, // Common ports
+		timeout:     time.Second * 2,
+		maxHosts:    256,
+		verbose:     verbose,
+		liveDisplay: liveDisplay,
 	}
 }
 
@@ -72,6 +81,13 @@ func (s *Scanner) scanNetwork(cidr string) error {
 		if len(hosts) >= s.maxHosts {
 			break
 		}
+	}
+
+	s.totalHosts = len(hosts)
+	if s.liveDisplay {
+		fmt.Printf("Starting scan of %d hosts in %s\n", s.totalHosts, cidr)
+		// Start a goroutine to display progress
+		go s.displayProgress()
 	}
 
 	var wg sync.WaitGroup
@@ -90,11 +106,131 @@ func (s *Scanner) scanNetwork(cidr string) error {
 			s.mu.Lock()
 			s.results = append(s.results, info)
 			s.mu.Unlock()
+
+			if s.liveDisplay {
+				s.displayHostResult(info)
+			}
+
+			// Update progress counter
+			atomic.AddInt32(&s.hostsScanned, 1)
 		}(host)
 	}
 
 	wg.Wait()
+	
+	if s.liveDisplay {
+		fmt.Printf("\nScan complete. %d hosts scanned.\n", s.totalHosts)
+	}
+	
 	return nil
+}
+
+// Displays live progress of the scan
+func (s *Scanner) displayProgress() {
+	for {
+		scanned := atomic.LoadInt32(&s.hostsScanned)
+		if scanned >= int32(s.totalHosts) {
+			break
+		}
+
+		percentage := float64(scanned) / float64(s.totalHosts) * 100
+		fmt.Printf("\rProgress: %.1f%% (%d/%d hosts scanned)", percentage, scanned, s.totalHosts)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// Displays detailed host result during live scanning
+func (s *Scanner) displayHostResult(info HostInfo) {
+	if !s.verbose {
+		// In non-verbose mode, just show basic information
+		status := "✓"
+		if !info.IsReachable {
+			status = "✗"
+		}
+		
+		s.progressMutex.Lock()
+		fmt.Printf("\r\n%s %s", status, info.IPAddress)
+		if info.Hostname != "" {
+			fmt.Printf(" (%s)", info.Hostname)
+		}
+		fmt.Printf(" - %d open ports", len(info.OpenPorts))
+		s.progressMutex.Unlock()
+		return
+	}
+	
+	// Verbose mode shows detailed ping results
+	s.progressMutex.Lock()
+	defer s.progressMutex.Unlock()
+	
+	fmt.Printf("\r\n==========================================\n")
+	fmt.Printf("Host: %s\n", info.IPAddress)
+	if info.Hostname != "" {
+		fmt.Printf("Hostname: %s\n", info.Hostname)
+	}
+	fmt.Printf("Status: %s\n", statusText(info.IsReachable))
+	
+	// Detailed ping statistics
+	fmt.Printf("\nPing Statistics:\n")
+	fmt.Printf("  Packets: %d sent, %d received, %.1f%% loss\n", 
+		info.PingStats.PacketsSent, 
+		info.PingStats.PacketsReceived,
+		info.PingStats.PacketLoss)
+	
+	if info.PingStats.PacketsReceived > 0 {
+		fmt.Printf("  Latency: %.2f ms min, %.2f ms avg, %.2f ms max\n",
+			info.PingStats.MinLatency,
+			info.PingStats.AvgLatency,
+			info.PingStats.MaxLatency)
+		fmt.Printf("  Jitter: %.2f ms\n", info.PingStats.Jitter)
+	}
+	
+	if len(info.OpenPorts) > 0 {
+		fmt.Printf("\nOpen Ports: %v\n", formatPorts(info.OpenPorts))
+	}
+	
+	if info.PingStats.ErrorMessage != "" {
+		fmt.Printf("\nError: %s\n", info.PingStats.ErrorMessage)
+	}
+	
+	fmt.Printf("==========================================\n")
+}
+
+func statusText(reachable bool) string {
+	if reachable {
+		return "Reachable"
+	}
+	return "Unreachable"
+}
+
+func formatPorts(ports []int) string {
+	var portStrings []string
+	for _, port := range ports {
+		service := getServiceName(port)
+		if service != "" {
+			portStrings = append(portStrings, fmt.Sprintf("%d (%s)", port, service))
+		} else {
+			portStrings = append(portStrings, fmt.Sprintf("%d", port))
+		}
+	}
+	return strings.Join(portStrings, ", ")
+}
+
+// Returns common service names for well-known ports
+func getServiceName(port int) string {
+	switch port {
+	case 22:
+		return "SSH"
+	case 80:
+		return "HTTP"
+	case 443:
+		return "HTTPS"
+	case 3389:
+		return "RDP"
+	case 8080:
+		return "HTTP-Alt"
+	default:
+		return ""
+	}
 }
 
 func (s *Scanner) scanHost(ip string) HostInfo {
@@ -311,17 +447,34 @@ func inc(ip net.IP) {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: net-grab <cidr>")
-		fmt.Println("Example: net-grab 192.168.1.0/24")
+	// Parse command-line flags
+	verbose := flag.Bool("v", false, "Enable verbose output")
+	live := flag.Bool("live", false, "Show live scanning results")
+	jsonOutput := flag.Bool("json", false, "Output results as JSON (default)")
+	flag.Parse()
+	
+	// Enable live display if verbose is enabled
+	if *verbose {
+		*live = true
+	}
+	
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Println("Usage: net-grab [options] <cidr>")
+		fmt.Println("Example: net-grab -v 192.168.1.0/24")
+		fmt.Println("\nOptions:")
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
-
-	scanner := NewScanner()
-	if err := scanner.scanNetwork(os.Args[1]); err != nil {
+	
+	scanner := NewScanner(*verbose, *live)
+	if err := scanner.scanNetwork(args[0]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
-	json.NewEncoder(os.Stdout).Encode(scanner.results)
+	
+	// Output results as JSON if not in live mode or if explicitly requested
+	if !*live || *jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(scanner.results)
+	}
 }
