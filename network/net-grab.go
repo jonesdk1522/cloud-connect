@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// Add color constants at the top of the file
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorPurple = "\033[35m"
+	ColorCyan   = "\033[36m"
+	ColorGray   = "\033[37m"
+)
+
 type PingStats struct {
 	PacketsSent     int       `json:"packets_sent"`
 	PacketsReceived int       `json:"packets_received"`
@@ -117,15 +129,15 @@ func (s *Scanner) scanNetwork(cidr string) error {
 	}
 
 	wg.Wait()
-	
+
 	if s.liveDisplay {
 		fmt.Printf("\nScan complete. %d hosts scanned.\n", s.totalHosts)
 	}
-	
+
 	return nil
 }
 
-// Displays live progress of the scan
+// Update displayProgress with color
 func (s *Scanner) displayProgress() {
 	for {
 		scanned := atomic.LoadInt32(&s.hostsScanned)
@@ -134,72 +146,93 @@ func (s *Scanner) displayProgress() {
 		}
 
 		percentage := float64(scanned) / float64(s.totalHosts) * 100
-		fmt.Printf("\rProgress: %.1f%% (%d/%d hosts scanned)", percentage, scanned, s.totalHosts)
+		fmt.Printf("\r%sProgress: %s%.1f%% (%d/%d hosts scanned)%s",
+			ColorBlue,
+			ColorYellow,
+			percentage,
+			scanned,
+			s.totalHosts,
+			ColorReset)
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-// Displays detailed host result during live scanning
+// Update displayHostResult with color
 func (s *Scanner) displayHostResult(info HostInfo) {
 	if !s.verbose {
-		// In non-verbose mode, just show basic information
-		status := "✓"
+		status := ColorGreen + "✓" + ColorReset
 		if !info.IsReachable {
-			status = "✗"
+			status = ColorRed + "✗" + ColorReset
 		}
-		
+
 		s.progressMutex.Lock()
-		fmt.Printf("\r\n%s %s", status, info.IPAddress)
+		fmt.Printf("\r\n%s %s%s%s",
+			status,
+			ColorCyan,
+			info.IPAddress,
+			ColorReset)
 		if info.Hostname != "" {
-			fmt.Printf(" (%s)", info.Hostname)
+			fmt.Printf(" (%s%s%s)", ColorYellow, info.Hostname, ColorReset)
 		}
-		fmt.Printf(" - %d open ports", len(info.OpenPorts))
+		fmt.Printf(" - %s%d open ports%s", ColorPurple, len(info.OpenPorts), ColorReset)
 		s.progressMutex.Unlock()
 		return
 	}
-	
-	// Verbose mode shows detailed ping results
+
 	s.progressMutex.Lock()
 	defer s.progressMutex.Unlock()
-	
-	fmt.Printf("\r\n==========================================\n")
-	fmt.Printf("Host: %s\n", info.IPAddress)
+
+	fmt.Printf("\r\n%s===========================================%s\n", ColorBlue, ColorReset)
+	fmt.Printf("%sHost:%s %s%s%s\n", ColorGray, ColorReset, ColorCyan, info.IPAddress, ColorReset)
 	if info.Hostname != "" {
-		fmt.Printf("Hostname: %s\n", info.Hostname)
+		fmt.Printf("%sHostname:%s %s%s%s\n", ColorGray, ColorReset, ColorYellow, info.Hostname, ColorReset)
 	}
-	fmt.Printf("Status: %s\n", statusText(info.IsReachable))
-	
-	// Detailed ping statistics
-	fmt.Printf("\nPing Statistics:\n")
-	fmt.Printf("  Packets: %d sent, %d received, %.1f%% loss\n", 
-		info.PingStats.PacketsSent, 
+	fmt.Printf("%sStatus:%s %s\n", ColorGray, ColorReset, colorStatus(info.IsReachable))
+
+	fmt.Printf("\n%sPing Statistics:%s\n", ColorBlue, ColorReset)
+	fmt.Printf("  %sPackets:%s %d sent, %d received, %.1f%% loss\n",
+		ColorGray,
+		ColorReset,
+		info.PingStats.PacketsSent,
 		info.PingStats.PacketsReceived,
 		info.PingStats.PacketLoss)
-	
+
 	if info.PingStats.PacketsReceived > 0 {
-		fmt.Printf("  Latency: %.2f ms min, %.2f ms avg, %.2f ms max\n",
+		fmt.Printf("  %sLatency:%s %.2f ms min, %.2f ms avg, %.2f ms max\n",
+			ColorGray,
+			ColorReset,
 			info.PingStats.MinLatency,
 			info.PingStats.AvgLatency,
 			info.PingStats.MaxLatency)
-		fmt.Printf("  Jitter: %.2f ms\n", info.PingStats.Jitter)
+		fmt.Printf("  %sJitter:%s %.2f ms\n", ColorGray, ColorReset, info.PingStats.Jitter)
 	}
-	
+
 	if len(info.OpenPorts) > 0 {
-		fmt.Printf("\nOpen Ports: %v\n", formatPorts(info.OpenPorts))
+		fmt.Printf("\n%sOpen Ports:%s %s%v%s\n",
+			ColorBlue,
+			ColorReset,
+			ColorPurple,
+			formatPorts(info.OpenPorts),
+			ColorReset)
 	}
-	
+
 	if info.PingStats.ErrorMessage != "" {
-		fmt.Printf("\nError: %s\n", info.PingStats.ErrorMessage)
+		fmt.Printf("\n%sError:%s %s%s%s\n",
+			ColorRed,
+			ColorReset,
+			ColorRed,
+			info.PingStats.ErrorMessage,
+			ColorReset)
 	}
-	
-	fmt.Printf("==========================================\n")
+
+	fmt.Printf("%s===========================================%s\n", ColorBlue, ColorReset)
 }
 
-func statusText(reachable bool) string {
+func colorStatus(reachable bool) string {
 	if reachable {
-		return "Reachable"
+		return ColorGreen + "Reachable" + ColorReset
 	}
-	return "Unreachable"
+	return ColorRed + "Unreachable" + ColorReset
 }
 
 func formatPorts(ports []int) string {
@@ -446,35 +479,111 @@ func inc(ip net.IP) {
 	}
 }
 
-func main() {
-	// Parse command-line flags
-	verbose := flag.Bool("v", false, "Enable verbose output")
-	live := flag.Bool("live", false, "Show live scanning results")
-	jsonOutput := flag.Bool("json", false, "Output results as JSON (default)")
-	flag.Parse()
-	
-	// Enable live display if verbose is enabled
-	if *verbose {
-		*live = true
+// Update formatHostResult with color
+func formatHostResult(info HostInfo) string {
+	var result strings.Builder
+
+	status := ColorGreen + "✓" + ColorReset
+	if !info.IsReachable {
+		status = ColorRed + "✗" + ColorReset
 	}
-	
+
+	fmt.Fprintf(&result, "\n%s %s%s%s",
+		status,
+		ColorCyan,
+		info.IPAddress,
+		ColorReset)
+	if info.Hostname != "" {
+		fmt.Fprintf(&result, " (%s%s%s)", ColorYellow, info.Hostname, ColorReset)
+	}
+
+	if info.PingStats.PacketsReceived > 0 {
+		fmt.Fprintf(&result, "\n  %sLatency:%s %.1fms min / %.1fms avg / %.1fms max",
+			ColorGray,
+			ColorReset,
+			info.PingStats.MinLatency,
+			info.PingStats.AvgLatency,
+			info.PingStats.MaxLatency)
+		fmt.Fprintf(&result, "\n  %sPacket Loss:%s %.1f%% (%d/%d)",
+			ColorGray,
+			ColorReset,
+			info.PingStats.PacketLoss,
+			info.PingStats.PacketsReceived,
+			info.PingStats.PacketsSent)
+	}
+
+	if len(info.OpenPorts) > 0 {
+		fmt.Fprintf(&result, "\n  %sOpen Ports:%s %s%s%s",
+			ColorBlue,
+			ColorReset,
+			ColorPurple,
+			formatColoredPorts(info.OpenPorts),
+			ColorReset)
+	}
+
+	return result.String()
+}
+
+func formatColoredPorts(ports []int) string {
+	var portStrings []string
+	for _, port := range ports {
+		service := getServiceName(port)
+		if service != "" {
+			portStrings = append(portStrings, fmt.Sprintf("%d (%s%s%s)",
+				port,
+				ColorCyan,
+				service,
+				ColorPurple))
+		} else {
+			portStrings = append(portStrings, fmt.Sprintf("%d", port))
+		}
+	}
+	return strings.Join(portStrings, ", ")
+}
+
+func main() {
+	verbose := flag.Bool("v", true, "Enable verbose output")      // Default to true
+	live := flag.Bool("live", true, "Show live scanning results") // Default to true
+	jsonOutput := flag.Bool("json", false, "Output results as JSON")
+	flag.Parse()
+
 	args := flag.Args()
 	if len(args) != 1 {
 		fmt.Println("Usage: net-grab [options] <cidr>")
-		fmt.Println("Example: net-grab -v 192.168.1.0/24")
+		fmt.Println("Example: net-grab 192.168.1.0/24")
 		fmt.Println("\nOptions:")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	
+
+	fmt.Printf("Starting network scan of %s...\n", args[0])
+
 	scanner := NewScanner(*verbose, *live)
 	if err := scanner.scanNetwork(args[0]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	
-	// Output results as JSON if not in live mode or if explicitly requested
-	if !*live || *jsonOutput {
+
+	// Always show a summary
+	fmt.Printf("\nScan Summary:\n")
+	fmt.Printf("Total hosts scanned: %d\n", len(scanner.results))
+
+	reachable := 0
+	for _, host := range scanner.results {
+		if host.IsReachable {
+			reachable++
+		}
+	}
+
+	fmt.Printf("Hosts responding: %d\n", reachable)
+
+	// Output detailed results
+	if *jsonOutput {
 		json.NewEncoder(os.Stdout).Encode(scanner.results)
+	} else {
+		fmt.Println("\nDetailed Results:")
+		for _, host := range scanner.results {
+			fmt.Println(formatHostResult(host))
+		}
 	}
 }

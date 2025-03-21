@@ -641,29 +641,81 @@ program
   .command('net-grab')
   .description('Scan network and collect host information')
   .argument('<cidr>', 'Network CIDR to scan (e.g., 192.168.1.0/24)')
-  .action(async (cidr) => {
+  .option('-v, --verbose', 'Show verbose output', true)
+  .option('-j, --json', 'Output as JSON', false)
+  .action(async (cidr, options) => {
     try {
       console.log(chalk.cyan(`Starting network scan of ${cidr}...`));
       
-      const result = await executeGoTool('net-grab', [cidr]);
+      const args = ['-v'];
+      if (options.json) args.push('--json');
+      args.push(cidr);
       
-      // Pretty print the results
-      if (Array.isArray(result)) {
-        console.log('\nDiscovered hosts:');
-        result.forEach(host => {
-          console.log(chalk.green(`\n${host.ip_address}:`));
-          if (host.hostname) console.log(`  Hostname: ${host.hostname}`);
-          console.log(`  Reachable: ${host.is_reachable}`);
-          if (host.latency_ms) console.log(`  Latency: ${host.latency_ms}ms`);
-          if (host.open_ports?.length) console.log(`  Open ports: ${host.open_ports.join(', ')}`);
-          if (host.dns_names?.length) console.log(`  DNS names: ${host.dns_names.join(', ')}`);
+      // Use spawn instead of execFile to get real-time output
+      const { spawn } = await import('child_process');
+      const toolPath = path.join(__dirname, '../bin/net-grab');
+      
+      if (!fs.existsSync(toolPath)) {
+        console.error(chalk.red('Error: net-grab binary not found'));
+        console.log(chalk.yellow('Building net-grab binary...'));
+        
+        // Build the binary
+        const buildPath = path.join(__dirname, '../network');
+        const goBuild = spawn('go', ['build', '-o', toolPath, 'net-grab.go'], {
+          cwd: buildPath,
+        });
+        
+        await new Promise((resolve, reject) => {
+          goBuild.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Failed to build net-grab (exit code ${code})`));
+          });
         });
       }
+      
+      // Set executable permissions on Unix-like systems
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(toolPath, 0o755);
+        } catch (err) {
+          console.warn(chalk.yellow(`Warning: Could not set executable permissions: ${err.message}`));
+        }
+      }
+      
+      // Run the scanner
+      const scanner = spawn(toolPath, args);
+      
+      // Handle output in real-time
+      scanner.stdout.on('data', (data) => {
+        const output = data.toString();
+        if (options.json) {
+          try {
+            const parsed = JSON.parse(output);
+            console.log(JSON.stringify(parsed, null, 2));
+          } catch {
+            process.stdout.write(output);
+          }
+        } else {
+          process.stdout.write(output);
+        }
+      });
+      
+      scanner.stderr.on('data', (data) => {
+        console.error(chalk.red(data.toString()));
+      });
+      
+      await new Promise((resolve, reject) => {
+        scanner.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`Scanner failed with exit code ${code}`));
+        });
+      });
+      
     } catch (error) {
       console.error(chalk.red('Error:'), error.message);
-      if (error.message.includes('ENOEXEC')) {
-        console.log(chalk.yellow('\nRebuild the Go binary:'));
-        console.log(`cd "${path.join(__dirname, '../network')}" && go build net-grab.go`);
+      if (error.message.includes('ENOENT')) {
+        console.log(chalk.yellow('\nMake sure Go is installed and in your PATH'));
+        console.log('Install Go from: https://golang.org/dl/');
       }
     }
   });
