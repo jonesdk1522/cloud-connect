@@ -14,14 +14,21 @@ if ! command -v go &> /dev/null; then
     exit 1
 fi
 
+# Enable nullglob to ensure an empty pattern expands to nothing
+shopt -s nullglob
+
 # Create bin directory if it doesn't exist
-mkdir -p ../bin
+mkdir -p ./bin
+
+# List and debug files found in network directory
+files=(network/*.go)
+echo "Found ${#files[@]} Go file(s): ${files[*]}"
 
 # Build all Go tools and place binaries in bin directory
-for file in network/*.go; do
+for file in "${files[@]}"; do
     name="${file%.go}"
     name="${name##*/}"
-    echo "Building $name..."
+    echo "Building $name from $file..."
     go build -o "./bin/$name" "$file"
     # Make binary executable
     chmod +x "./bin/$name"
@@ -31,4 +38,4 @@ done
 # Make the build script itself executable too
 chmod +x "$0"
 
-echo "Build complete. All binaries in ../bin/ are executable"
+echo "Build complete. All binaries in ./bin/ are executable"
