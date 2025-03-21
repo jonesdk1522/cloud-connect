@@ -18,12 +18,13 @@ fi
 mkdir -p ../bin
 
 # Build all Go tools and place binaries in bin directory
-for file in *.go; do
+for file in network/*.go; do
     name="${file%.go}"
+    name="${name##*/}"
     echo "Building $name..."
-    go build -o "../bin/$name" "$file"
+    go build -o "./bin/$name" "$file"
     # Make binary executable
-    chmod +x "../bin/$name"
+    chmod +x "./bin/$name"
     echo -e "Made $name executable ✅"
 done
 
