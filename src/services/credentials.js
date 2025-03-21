@@ -538,6 +538,11 @@ export function createCredentialProvider(config) {
   
   console.log(chalk.blue(`Creating credential provider using method: ${config.method}`));
   
+  // Determine region once, for all credential types
+  const region = config.isGovCloud 
+    ? (config.govCloudRegion || 'us-gov-west-1')
+    : 'us-east-1';
+  
   if (config.method === 'ec2-instance-metadata') {
     console.log(chalk.blue('Using EC2 instance metadata credentials'));
     
@@ -557,12 +562,12 @@ export function createCredentialProvider(config) {
             });
           } catch (error) {
             console.log(chalk.yellow(`Failed to auto-detect region: ${error.message}`));
-            console.log(chalk.yellow('Falling back to default region: us-east-1'));
+            console.log(chalk.yellow(`Falling back to ${region}`));
             
             return fromInstanceMetadata({
               timeout: 10000,
               maxRetries: 5,
-              region: 'us-east-1',
+              region: region,
               ignoreCache: false
             });
           }
@@ -573,10 +578,6 @@ export function createCredentialProvider(config) {
       }
     }
     
-    const region = config.isGovCloud 
-      ? (config.govCloudRegion || 'us-gov-west-1')
-      : 'us-east-1';
-    
     return fromInstanceMetadata({
       timeout: 5000,
       maxRetries: 3,
@@ -584,10 +585,7 @@ export function createCredentialProvider(config) {
     });
   }
   
-  const region = config.isGovCloud 
-    ? (config.govCloudRegion || 'us-gov-west-1')
-    : 'us-east-1';
-  
+  // Rest of the credential provider logic using the region variable
   switch (config.method) {
     case 'access-keys':
       return async () => ({
@@ -632,13 +630,6 @@ export function createCredentialProvider(config) {
         roleArn: config.roleArn,
         roleSessionName: config.sessionName || 'cloud-connect-web-session',
         webIdentityToken: fs.readFileSync(config.tokenFile, 'utf8')
-      });
-      
-    case 'ec2-instance-metadata':
-      return fromInstanceMetadata({
-        timeout: 5000,
-        maxRetries: 3,
-        region: region
       });
       
     default:
