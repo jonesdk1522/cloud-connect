@@ -35,7 +35,8 @@ import {
 import { loadSnapshot, SNAPSHOTS_DIR } from '../utils/snapshot.js';
 import { 
   configureCredentialsInteractive,
-  loadCredentials
+  loadCredentials,
+  verifyCredentialsFile
 } from '../services/credentials.js';
 
 // Helper function to create tables
@@ -50,6 +51,16 @@ const createTable = (headers) => {
     }
   });
 };
+
+async function verifyCredentialsConfig() {
+  const result = await verifyCredentialsFile();
+  if (!result) {
+    console.log(chalk.yellow('Suggestions:'));
+    console.log(chalk.yellow('1. Run "cloud-connect configure-credentials" to set up credentials'));
+    console.log(chalk.yellow('2. Check if ~/.cloud-connect directory exists and is writable'));
+    console.log(chalk.yellow('3. Check for any error messages during credential configuration'));
+  }
+}
 
 export const commands = {
   // VPC commands
@@ -1015,6 +1026,8 @@ export const commands = {
       throw error;
     }
   },
+
+  verifyCredentialsConfig,
 };
 
 // Find the method that handles VPC listing

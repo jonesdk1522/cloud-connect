@@ -381,6 +381,17 @@ program
     }
   });
 
+program
+  .command('verify-credentials')
+  .description('Verify if credentials file exists and is valid')
+  .action(async () => {
+    try {
+      await commands.verifyCredentialsConfig();
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
 // Helper function to adjust region for GovCloud
 function getRegion(region, isGovCloud) {
   // If GovCloud is specified but the region doesn't look like a GovCloud region

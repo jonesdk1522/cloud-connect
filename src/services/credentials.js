@@ -11,6 +11,7 @@ import {
 } from '@aws-sdk/credential-providers';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
+import https from 'https';
 import chalk from 'chalk';
 import { applyCredentialsToClients } from '../aws/client.js';
 
@@ -31,44 +32,55 @@ async function ensureConfigDir() {
 
 // Save credentials to file
 export async function saveCredentials(credentials, method) {
-  await ensureConfigDir();
-  
-  const safeCredentials = {
-    method,
-    timestamp: new Date().toISOString(),
-    ...credentials
-  };
-  
-  if (method === 'profile') {
-    delete safeCredentials.accessKeyId;
-    delete safeCredentials.secretAccessKey;
-  } else if (method === 'role') {
-    delete safeCredentials.sourceCredentials;
-  }
-  
-  console.log(chalk.blue('Saving credential configuration:'));
-  console.log(chalk.blue(`- Method: ${method}`));
-  if (method === 'ec2-instance-metadata') {
-    console.log(chalk.blue(`- Use current region: ${credentials.useCurrentRegion}`));
-    if (!credentials.useCurrentRegion) {
-      console.log(chalk.blue(`- Is GovCloud: ${credentials.isGovCloud}`));
-      if (credentials.isGovCloud) {
-        console.log(chalk.blue(`- GovCloud region: ${credentials.govCloudRegion}`));
+  try {
+    await ensureConfigDir();
+    
+    const safeCredentials = {
+      method,
+      timestamp: new Date().toISOString(),
+      ...credentials
+    };
+    
+    if (method === 'profile') {
+      delete safeCredentials.accessKeyId;
+      delete safeCredentials.secretAccessKey;
+    } else if (method === 'role') {
+      delete safeCredentials.sourceCredentials;
+    }
+    
+    console.log(chalk.blue('Saving credential configuration:'));
+    console.log(chalk.blue(`- Method: ${method}`));
+    if (method === 'ec2-instance-metadata') {
+      console.log(chalk.blue(`- Use current region: ${credentials.useCurrentRegion}`));
+      if (!credentials.useCurrentRegion) {
+        console.log(chalk.blue(`- Is GovCloud: ${credentials.isGovCloud}`));
+        if (credentials.isGovCloud) {
+          console.log(chalk.blue(`- GovCloud region: ${credentials.govCloudRegion}`));
+        }
       }
     }
+    
+    console.log(chalk.blue(`Writing to credentials file: ${CREDENTIALS_FILE}`));
+    
+    const configData = JSON.stringify(safeCredentials, null, 2);
+    await fs.writeFile(CREDENTIALS_FILE, configData, 'utf8');
+    
+    const fileExists = await fs.access(CREDENTIALS_FILE)
+      .then(() => true)
+      .catch(() => false);
+    
+    if (fileExists) {
+      console.log(chalk.green('✅ Credentials saved successfully!'));
+      return true;
+    } else {
+      console.log(chalk.red('❌ Failed to save credentials - file not found after write'));
+      return false;
+    }
+  } catch (error) {
+    console.error(chalk.red(`Error saving credentials: ${error.message}`));
+    console.error(chalk.red(`Error details: ${error.stack}`));
+    return false;
   }
-  
-  await fs.writeFile(
-    CREDENTIALS_FILE,
-    JSON.stringify(safeCredentials, null, 2),
-    { mode: 0o600 }
-  );
-  
-  console.log(chalk.green(`Credentials saved to ${CREDENTIALS_FILE}`));
-  
-  await applyCredentialsToClients();
-  
-  return safeCredentials;
 }
 
 // Load credentials from file
@@ -400,6 +412,76 @@ export async function testCredentials(credentials) {
   }
 }
 
+// Function to get EC2 instance region from metadata service
+function getEC2Region() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      timeout: 5000,
+      host: '169.254.169.254',
+      path: '/latest/meta-data/placement/region',
+      method: 'GET',
+      headers: {
+        'X-aws-ec2-metadata-token-ttl-seconds': '21600'
+      }
+    };
+
+    // First get IMDSv2 token
+    const tokenReq = https.request({
+      ...options,
+      path: '/latest/api/token',
+      method: 'PUT'
+    }, (tokenRes) => {
+      let token = '';
+      
+      tokenRes.on('data', (chunk) => {
+        token += chunk;
+      });
+      
+      tokenRes.on('end', () => {
+        // Now use token to get region
+        const regionReq = https.request({
+          ...options,
+          headers: {
+            'X-aws-ec2-metadata-token': token
+          }
+        }, (regionRes) => {
+          let region = '';
+          
+          regionRes.on('data', (chunk) => {
+            region += chunk;
+          });
+          
+          regionRes.on('end', () => {
+            resolve(region.trim());
+          });
+        });
+        
+        regionReq.on('error', (error) => {
+          reject(error);
+        });
+        
+        regionReq.on('timeout', () => {
+          regionReq.destroy();
+          reject(new Error('Request timed out'));
+        });
+        
+        regionReq.end();
+      });
+    });
+    
+    tokenReq.on('error', (error) => {
+      reject(error);
+    });
+    
+    tokenReq.on('timeout', () => {
+      tokenReq.destroy();
+      reject(new Error('Token request timed out'));
+    });
+    
+    tokenReq.end();
+  });
+}
+
 // Create credential provider based on configuration
 export function createCredentialProvider(config) {
   if (!config) {
@@ -412,27 +494,46 @@ export function createCredentialProvider(config) {
     console.log(chalk.blue('Using EC2 instance metadata credentials'));
     
     if (config.useCurrentRegion) {
-      console.log(chalk.blue('Using auto-detected region from EC2 instance metadata'));
-      return fromInstanceMetadata({
-        timeout: 5000, 
-        maxRetries: 3,
-        ignoreCache: true,
-        profile: ''
-      });
-    } else {
-      const region = config.isGovCloud 
-        ? (config.govCloudRegion || 'us-gov-west-1')
-        : 'us-east-1';
-      console.log(chalk.blue(`Using specified region: ${region}`));
-      
-      return fromInstanceMetadata({
-        timeout: 5000,
-        maxRetries: 3,
-        region: region,
-        ignoreCache: true,
-        profile: ''
-      });
+      console.log(chalk.blue('Attempting to detect region from EC2 instance metadata...'));
+      try {
+        return async () => {
+          try {
+            const detectedRegion = await getEC2Region();
+            console.log(chalk.green(`Successfully detected region from metadata: ${detectedRegion}`));
+            
+            return fromInstanceMetadata({
+              timeout: 10000,
+              maxRetries: 5,
+              region: detectedRegion,
+              ignoreCache: false
+            });
+          } catch (error) {
+            console.log(chalk.yellow(`Failed to auto-detect region: ${error.message}`));
+            console.log(chalk.yellow('Falling back to default region: us-east-1'));
+            
+            return fromInstanceMetadata({
+              timeout: 10000,
+              maxRetries: 5,
+              region: 'us-east-1',
+              ignoreCache: false
+            });
+          }
+        };
+      } catch (error) {
+        console.log(chalk.yellow(`Error initializing EC2 metadata client: ${error.message}`));
+        console.log(chalk.yellow('Falling back to default configuration'));
+      }
     }
+    
+    const region = config.isGovCloud 
+      ? (config.govCloudRegion || 'us-gov-west-1')
+      : 'us-east-1';
+    
+    return fromInstanceMetadata({
+      timeout: 5000,
+      maxRetries: 3,
+      region: region
+    });
   }
   
   const region = config.isGovCloud 
@@ -572,4 +673,32 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
   }
   
   return credentials;
+}
+
+export async function verifyCredentialsFile() {
+  try {
+    const fileExists = await fs.access(CREDENTIALS_FILE)
+      .then(() => true)
+      .catch(() => false);
+    
+    if (!fileExists) {
+      console.log(chalk.yellow('No credentials file found!'));
+      return false;
+    }
+    
+    const fileContent = await fs.readFile(CREDENTIALS_FILE, 'utf8');
+    try {
+      const credentials = JSON.parse(fileContent);
+      console.log(chalk.green('Credentials file verification successful'));
+      console.log(chalk.blue(`- Method: ${credentials.method}`));
+      console.log(chalk.blue(`- Timestamp: ${credentials.timestamp}`));
+      return true;
+    } catch (error) {
+      console.log(chalk.red(`Credentials file exists but contains invalid JSON: ${error.message}`));
+      return false;
+    }
+  } catch (error) {
+    console.log(chalk.red(`Error verifying credentials file: ${error.message}`));
+    return false;
+  }
 }
