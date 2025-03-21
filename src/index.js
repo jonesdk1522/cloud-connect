@@ -6,6 +6,13 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { commands } from './cli/commands.js';
 import { handleError } from './utils/errorHandler.js';
+import { execFile } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const program = new Command();
 
@@ -394,7 +401,7 @@ program
 
 // Add connectivity test command
 program
-  .command('connectivity-test')
+  .command('netcon-aws')
   .description('Test connectivity to EC2 instances')
   .option('-p, --port <port>', 'Test a specific TCP port')
   .option('-i, --ip <ip>', 'Test a specific IP address')
@@ -419,6 +426,245 @@ program
       }
     } catch (error) {
       console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Function to execute Go tools directly
+function executeGoTool(toolName, args) {
+  return new Promise((resolve, reject) => {
+    const exeName = process.platform === 'win32' ? `${toolName}.exe` : toolName;
+    const toolPath = path.join(__dirname, '../bin', exeName);
+    const sourcePath = path.join(__dirname, '../network', `${toolName}.go`);
+    
+    console.log(chalk.blue(`Executing: ${toolPath} ${args.join(' ')}`));
+    
+    if (!fs.existsSync(toolPath)) {
+      console.error(chalk.red(`Error: Binary ${exeName} not found in bin directory`));
+      console.error(chalk.yellow('Build the Go binary first:'));
+      console.error(chalk.yellow(`cd "${path.join(__dirname, '../network')}" && go build -o "${toolPath}" ${toolName}.go`));
+      reject(new Error(`Binary ${toolName} not found. Build it first.`));
+      return;
+    }
+
+    // Set executable permissions on Unix-like systems
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(toolPath, 0o755);
+      } catch (err) {
+        console.warn(chalk.yellow(`Warning: Could not set executable permissions: ${err.message}`));
+      }
+    }
+
+    const options = {
+      maxBuffer: 1024 * 1024 * 10,
+      env: { ...process.env, PATH: `${process.env.PATH}:${path.join(__dirname, '../bin')}` }
+    };
+
+    execFile(toolPath, args, options, (error, stdout, stderr) => {
+      if (error) {
+        console.error(chalk.red(`Error executing tool: ${error.message}`));
+        if (stderr) console.error(chalk.red(`stderr: ${stderr}`));
+        reject(error);
+        return;
+      }
+      
+      if (!stdout.trim()) {
+        resolve({});
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        resolve(result);
+      } catch (e) {
+        console.log(chalk.yellow('Raw output:'), stdout);
+        reject(new Error(`Failed to parse output: ${e.message}`));
+      }
+    });
+  });
+}
+
+// Connectivity testing (ping, TCP, UDP)
+program
+  .command('connectivity')
+  .description('Test network connectivity (ping, TCP, UDP)')
+  .argument('<target>', 'Target IP or hostname')
+  .option('-m, --mode <mode>', 'Test mode: ping, tcp, udp, all', 'ping')
+  .option('-p, --port <port>', 'Port for TCP/UDP tests', '80')
+  .option('-t, --timeout <seconds>', 'Timeout in seconds', '5')
+  .action(async (target, options) => {
+    try {
+      console.log(chalk.cyan(`Testing connectivity to ${target} using ${options.mode.toUpperCase()}...`));
+      
+      const args = [
+        target,
+        options.mode,
+      ];
+      
+      if (options.mode === 'tcp' || options.mode === 'udp') {
+        args.push(options.port);
+      }
+      
+      args.push(options.timeout);
+      
+      const result = await executeGoTool('connectivity', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Traceroute command
+program
+  .command('traceroute')
+  .description('Trace route to a target host')
+  .argument('<target>', 'Target IP or hostname')
+  .option('-m, --max-hops <hops>', 'Maximum number of hops', '30')
+  .option('-t, --timeout <seconds>', 'Timeout in seconds', '60')
+  .option('-n, --numeric', 'Use numeric output (no hostname resolution)', false)
+  .action(async (target, options) => {
+    try {
+      console.log(chalk.cyan(`Tracing route to ${target}...`));
+      
+      const args = [
+        target,
+        options.maxHops,
+        options.timeout,
+        options.numeric ? 'true' : 'false'
+      ];
+      
+      const result = await executeGoTool('traceroute', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Port scanning
+program
+  .command('port-scan')
+  .description('Scan for open ports on a target host')
+  .argument('<target>', 'Target IP or hostname')
+  .argument('<port-range>', 'Port range to scan (e.g., 80,443 or 1-1000)')
+  .option('-t, --timeout <seconds>', 'Timeout in seconds per port', '2')
+  .option('-c, --concurrent <num>', 'Maximum concurrent port scans', '100')
+  .action(async (target, portRange, options) => {
+    try {
+      console.log(chalk.cyan(`Scanning ports on ${target} (${portRange})...`));
+      
+      const args = [
+        target,
+        portRange,
+        options.timeout,
+        options.concurrent
+      ];
+      
+      const result = await executeGoTool('portscan', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Network interfaces
+program
+  .command('interfaces')
+  .description('Get information about network interfaces')
+  .option('-i, --interface <name>', 'Specific interface to query', 'all')
+  .action(async (options) => {
+    try {
+      console.log(chalk.cyan('Getting network interface information...'));
+      
+      const args = [options.interface];
+      
+      const result = await executeGoTool('interfaces', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// HTTP testing
+program
+  .command('http-test')
+  .description('Test HTTP/HTTPS endpoints')
+  .argument('<url>', 'URL to test (comma-separated for multiple)')
+  .option('-t, --timeout <seconds>', 'Timeout in seconds', '10')
+  .option('-r, --no-redirects', 'Do not follow redirects', false)
+  .option('-k, --insecure', 'Allow insecure SSL connections', false)
+  .action(async (url, options) => {
+    try {
+      console.log(chalk.cyan(`Testing HTTP endpoint: ${url}...`));
+      
+      const args = [
+        url,
+        options.timeout,
+        options.noRedirects ? '0' : '1',
+        options.insecure ? '1' : '0'
+      ];
+      
+      const result = await executeGoTool('http-test', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// DNS lookup
+program
+  .command('dns-lookup')
+  .description('Look up DNS records')
+  .argument('<domain>', 'Domain to look up (comma-separated for multiple)')
+  .argument('<type>', 'Record type: a, aaaa, cname, mx, ns, txt, all (comma-separated for multiple)')
+  .option('-s, --server <server>', 'DNS server to use', '')
+  .option('-t, --timeout <seconds>', 'Timeout in seconds', '10')
+  .action(async (domain, type, options) => {
+    try {
+      console.log(chalk.cyan(`Looking up DNS records for ${domain}...`));
+      
+      const args = [
+        domain,
+        type,
+        options.server,
+        options.timeout
+      ];
+      
+      const result = await executeGoTool('dns', args);
+      console.log(result);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+    }
+  });
+
+// Network scanning command
+program
+  .command('net-grab')
+  .description('Scan network and collect host information')
+  .argument('<cidr>', 'Network CIDR to scan (e.g., 192.168.1.0/24)')
+  .action(async (cidr) => {
+    try {
+      console.log(chalk.cyan(`Starting network scan of ${cidr}...`));
+      
+      const result = await executeGoTool('net-grab', [cidr]);
+      
+      // Pretty print the results
+      if (Array.isArray(result)) {
+        console.log('\nDiscovered hosts:');
+        result.forEach(host => {
+          console.log(chalk.green(`\n${host.ip_address}:`));
+          if (host.hostname) console.log(`  Hostname: ${host.hostname}`);
+          console.log(`  Reachable: ${host.is_reachable}`);
+          if (host.latency_ms) console.log(`  Latency: ${host.latency_ms}ms`);
+          if (host.open_ports?.length) console.log(`  Open ports: ${host.open_ports.join(', ')}`);
+          if (host.dns_names?.length) console.log(`  DNS names: ${host.dns_names.join(', ')}`);
+        });
+      }
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      if (error.message.includes('ENOEXEC')) {
+        console.log(chalk.yellow('\nRebuild the Go binary:'));
+        console.log(`cd "${path.join(__dirname, '../network')}" && go build net-grab.go`);
+      }
     }
   });
 
@@ -451,23 +697,65 @@ export function getRegion(specifiedRegion, isGovCloud) {
 // Add a general help message
 program.addHelpText('after', `
 Examples:
-  $ cloud-connect vpcs --region us-west-2
-  $ cloud-connect subnets --vpc vpc-12345
-  $ cloud-connect route-tables --vpc vpc-12345
-  $ cloud-connect transit-gateways
-  $ cloud-connect tgw-attachments --tgw tgw-12345
-  $ cloud-connect endpoints --vpc vpc-12345
-  $ cloud-connect snapshot --name baseline
-  $ cloud-connect snapshot-all
-  $ cloud-connect list-snapshots
-  $ cloud-connect compare-snapshots baseline latest
+  AWS Infrastructure:
+    # VPC Commands
+    $ cloud-connect vpcs                            List VPCs in current region
+    $ cloud-connect all-vpcs                        List VPCs across all regions
+    $ cloud-connect vpc-details --vpc-id vpc-123    Detailed VPC report
+    $ cloud-connect vpc-details --all-regions       Check VPCs in all regions
 
-Credentials:
-  Configure AWS credentials via:
-  - Environment variables: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-  - AWS credentials file (~/.aws/credentials)
-  
-  For GovCloud, use --gov-cloud flag and ensure you're using GovCloud credentials
+    # Subnet & Routing
+    $ cloud-connect subnets --vpc vpc-123          List subnets for a VPC
+    $ cloud-connect route-tables --vpc vpc-123      List route tables for a VPC
+
+    # Transit Gateway
+    $ cloud-connect transit-gateways               List all transit gateways
+    $ cloud-connect tgw-attachments --tgw tgw-123  List TGW attachments
+    $ cloud-connect tgw-route-tables --tgw tgw-123 List TGW route tables
+                    [--type static|propagated]      Filter by route type
+                    [--state active|blackhole]      Filter by route state
+                    [--cidr 10.0.0.0/16]           Filter by CIDR block
+
+    # PrivateLink & Endpoints
+    $ cloud-connect endpoints --vpc vpc-123         List VPC endpoints
+    $ cloud-connect endpoints-detailed --vpc vpc-123 Detailed endpoint info
+    $ cloud-connect private-link                    List PrivateLink services
+    $ cloud-connect private-link-service svc-123    Show service details
+    $ cloud-connect my-services                     List your service configs
+    $ cloud-connect modify-service-permissions \\
+        svc-123 111122223333 --action add          Modify service permissions
+
+  Network Change Management:
+    $ cloud-connect snapshot --name baseline        Take network snapshot
+    $ cloud-connect snapshot-all                    Snapshot all regions
+    $ cloud-connect list-snapshots                  List saved snapshots
+    $ cloud-connect compare-snapshots base latest   Compare snapshots
+    $ cloud-connect check-drift baseline            Compare with live state
+
+  Network Diagnostics:
+    $ cloud-connect connectivity google.com -m tcp -p 443  Test connectivity
+    $ cloud-connect traceroute cloudflare.com       Trace network path
+    $ cloud-connect port-scan example.com 80,443    Scan ports
+    $ cloud-connect interfaces                      List network interfaces
+    $ cloud-connect http-test https://example.com   Test HTTP endpoints
+    $ cloud-connect dns-lookup google.com all       DNS lookup
+    $ cloud-connect net-grab 192.168.1.0/24        Network discovery scan
+
+  AWS Connectivity Testing:
+    $ cloud-connect netcon-aws                      Test AWS connectivity
+    $ cloud-connect netcon-aws -p 443 -i 10.0.0.1  Test specific endpoint
+
+  Credential Management:
+    $ cloud-connect configure-credentials           Configure AWS credentials
+    $ cloud-connect current-credentials             Show current credentials
+    $ cloud-connect verify-credentials              Verify credential setup
+    $ cloud-connect check-permissions               Check AWS permissions
+
+Global Options:
+  --region [region]      Specify AWS region (default: auto-detect)
+  --gov-cloud           Use AWS GovCloud regions
+
+Use "cloud-connect [command] --help" for detailed information about a command
 `);
 
 // Parse arguments and execute

@@ -61,12 +61,14 @@ The installation script will:
 2. Install required dependencies (Node.js, npm, Go) if missing
 3. Build the Go components
 4. Install Node.js dependencies
-5. Set up the global command
+5. Set up the command either globally (with sudo) or locally (in ~/.local/bin)
 
-After installation, you can run the tool with:
-```bash
-cloud-connect --help
-```
+After installation:
+- If installed globally, you can run immediately: `cloud-connect --help`
+- If installed locally, you may need to:
+  1. Add `~/.local/bin` to your PATH
+  2. Reload your shell configuration
+  3. Then run: `cloud-connect --help`
 
 ### Manual Installation
 
@@ -214,13 +216,13 @@ GovCloud environments require separate credentials. To set them up:
 aws configure --profile govcloud
 
 # Use the profile when running commands
-AWS_PROFILE=govcloud cloud-connect vpcs --gov-cloud
+AWS_PROFILE=govcloud cloud-connect vpcs
 ```
 
 Alternatively, you can set the environment variable for your session:
 ```bash
 export AWS_PROFILE=govcloud
-cloud-connect vpc-details --gov-cloud
+cloud-connect vpc-details
 ```
 
 ## Tracking Network Changes
@@ -311,7 +313,7 @@ AWS GovCloud has the following regions:
 - us-gov-east-1 (US East)
 - us-gov-west-1 (US West)
 
-Use the `--gov-cloud` flag with commands to work with GovCloud regions.
+All commands work seamlessly with both commercial and GovCloud regions - no special flags required.
 
 ## Direct Execution
 
@@ -328,7 +330,7 @@ npm link
 After linking, you can use the tool directly:
 
 ```bash
-cloud-connect vpc-details --vpc vpc-12345678 --gov-cloud
+cloud-connect vpc-details --vpc vpc-12345678
 cloud-connect vpc-details --all-regions
 cloud-connect snapshot --name baseline
 cloud-connect compare-snapshots baseline latest
@@ -353,6 +355,13 @@ cloud-connect compare-snapshots baseline latest
 #### Network Tool Failures
 - **Issue**: Tools appear installed but fail to run
   - **Solution**: Ensure the build script completed successfully and try running `./build.sh` again
+
+#### Installation Issues
+- **Issue**: Command not found after installation
+  - **Solution**: If installed locally, ensure `~/.local/bin` is in your PATH
+  - **Solution**: Run `source ~/.bashrc` or `source ~/.zshrc` after updating PATH
+- **Issue**: Permission denied when running commands
+  - **Solution**: Ensure the tool is executable: `chmod +x ~/.local/bin/cloud-connect`
 
 ### Debug Mode
 

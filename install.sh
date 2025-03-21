@@ -77,19 +77,28 @@ install_cloud_connect() {
     echo "Cloud Connect installed globally with sudo."
   else
     echo "No sudo access detected. Installing locally..."
-    mkdir -p "$HOME/.local/bin"
+    
+    # Create local bin directory if it doesn't exist
+    LOCAL_BIN="$HOME/.local/bin"
+    mkdir -p "$LOCAL_BIN"
+    
+    # Install npm dependencies locally
     npm install --prefix "$HOME/.local"
     
-    # Create a symlink in ~/.local/bin
-    ln -sf "$(pwd)/src/index.js" "$HOME/.local/bin/cloud-connect"
-    chmod +x "$HOME/.local/bin/cloud-connect"
+    # Create absolute path symlink
+    SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src/index.js"
+    ln -sf "$SCRIPT_PATH" "$LOCAL_BIN/cloud-connect"
+    chmod +x "$LOCAL_BIN/cloud-connect"
     
     # Check if PATH includes ~/.local/bin and advise if not
     if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-      echo "Please add the following line to your ~/.bashrc or ~/.zshrc file:"
-      echo "export PATH=\$PATH:\$HOME/.local/bin"
       echo
-      echo "Then run 'source ~/.bashrc' or 'source ~/.zshrc' to update your current session."
+      echo "To complete installation, add the following line to your shell profile"
+      echo "(.bashrc, .zshrc, etc):"
+      echo
+      echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+      echo
+      echo "Then run: source ~/.bashrc (or ~/.zshrc)"
     fi
   fi
 }
