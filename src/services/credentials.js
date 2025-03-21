@@ -415,8 +415,11 @@ export async function testCredentials(credentials) {
 // Function to get EC2 instance region from metadata service
 function getEC2Region() {
   return new Promise((resolve, reject) => {
+    console.log(chalk.blue('Attempting to retrieve region via IMDSv2...'));
+    
+    // IMDSv2 approach (with token)
     const options = {
-      timeout: 5000,
+      timeout: 3000, // Shorter timeout for faster fallback
       host: '169.254.169.254',
       path: '/latest/meta-data/placement/region',
       method: 'GET',
@@ -425,7 +428,7 @@ function getEC2Region() {
       }
     };
 
-    // First get IMDSv2 token
+    // First try IMDSv2 - get token
     const tokenReq = https.request({
       ...options,
       path: '/latest/api/token',
@@ -452,17 +455,20 @@ function getEC2Region() {
           });
           
           regionRes.on('end', () => {
+            console.log(chalk.green('Successfully retrieved region via IMDSv2'));
             resolve(region.trim());
           });
         });
         
         regionReq.on('error', (error) => {
-          reject(error);
+          console.log(chalk.yellow(`IMDSv2 region request failed: ${error.message}`));
+          tryIMDSv1();
         });
         
         regionReq.on('timeout', () => {
           regionReq.destroy();
-          reject(new Error('Request timed out'));
+          console.log(chalk.yellow('IMDSv2 region request timed out, falling back to IMDSv1'));
+          tryIMDSv1();
         });
         
         regionReq.end();
@@ -470,15 +476,57 @@ function getEC2Region() {
     });
     
     tokenReq.on('error', (error) => {
-      reject(error);
+      console.log(chalk.yellow(`IMDSv2 token request failed: ${error.message}`));
+      tryIMDSv1();
     });
     
     tokenReq.on('timeout', () => {
       tokenReq.destroy();
-      reject(new Error('Token request timed out'));
+      console.log(chalk.yellow('IMDSv2 token request timed out, falling back to IMDSv1'));
+      tryIMDSv1();
     });
     
     tokenReq.end();
+    
+    // Fallback to IMDSv1 if IMDSv2 fails
+    function tryIMDSv1() {
+      console.log(chalk.blue('Attempting to retrieve region via IMDSv1...'));
+      
+      const imdsV1Req = https.request({
+        timeout: 5000,
+        host: '169.254.169.254',
+        path: '/latest/meta-data/placement/region',
+        method: 'GET',
+      }, (response) => {
+        let region = '';
+        
+        response.on('data', (chunk) => {
+          region += chunk;
+        });
+        
+        response.on('end', () => {
+          if (region) {
+            console.log(chalk.green('Successfully retrieved region via IMDSv1'));
+            resolve(region.trim());
+          } else {
+            reject(new Error('Empty response from IMDSv1'));
+          }
+        });
+      });
+      
+      imdsV1Req.on('error', (error) => {
+        console.log(chalk.red(`IMDSv1 request failed: ${error.message}`));
+        reject(error);
+      });
+      
+      imdsV1Req.on('timeout', () => {
+        imdsV1Req.destroy();
+        console.log(chalk.red('IMDSv1 request timed out'));
+        reject(new Error('IMDSv1 region request timed out'));
+      });
+      
+      imdsV1Req.end();
+    }
   });
 }
 
