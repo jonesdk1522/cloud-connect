@@ -1,6 +1,6 @@
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
 import chalk from 'chalk';
-import { fromIni } from '@aws-sdk/credential-providers';
+import { fromIni, fromInstanceMetadata } from '@aws-sdk/credential-providers';
 import { 
   loadCredentials, 
   createCredentialProvider,
@@ -9,6 +9,29 @@ import {
 
 // Client cache to avoid creating redundant clients
 const clientCache = new Map();
+
+// Track if we're running on EC2
+let isEC2Instance = null;
+let cachedEC2Region = null;
+
+/**
+ * Check if we're running on an EC2 instance
+ */
+async function checkIfRunningOnEC2() {
+  if (isEC2Instance !== null) return isEC2Instance;
+  
+  try {
+    console.log(chalk.blue('Checking if running on EC2...'));
+    cachedEC2Region = await getEC2Region();
+    console.log(chalk.green(`✅ Running on EC2 in region: ${cachedEC2Region}`));
+    isEC2Instance = true;
+    return true;
+  } catch (error) {
+    console.log(chalk.yellow('Not running on EC2 or cannot access instance metadata'));
+    isEC2Instance = false;
+    return false;
+  }
+}
 
 /**
  * Creates or returns a cached AWS EC2 client
@@ -29,6 +52,12 @@ export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
     console.log(chalk.yellow(`GovCloud mode enabled, using region: ${region}`));
   }
   
+  // If we already know we're on EC2 and have a cached region, use it when no region is specified
+  if (isEC2Instance === true && cachedEC2Region && (!region || region === 'us-east-1')) {
+    region = cachedEC2Region;
+    console.log(chalk.blue(`Using detected EC2 region: ${region}`));
+  }
+  
   // Create a cache key based on region and GovCloud flag
   const cacheKey = `${region}-${isGovCloud}`;
   
@@ -47,8 +76,9 @@ export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
   // Create config for the client
   const clientConfig = { region: effectiveRegion };
   
-  // Add credentials to config if we have environment variables
+  // Add credentials to config
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+    // Environment variables take precedence
     console.log(chalk.green('Using access key credentials from environment variables'));
     clientConfig.credentials = {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -56,17 +86,24 @@ export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
       sessionToken: process.env.AWS_SESSION_TOKEN
     };
   } 
-  // Use profile if specified
   else if (process.env.AWS_PROFILE) {
+    // Profile takes second precedence
     console.log(chalk.green(`Using credentials from AWS profile: ${process.env.AWS_PROFILE}`));
     clientConfig.credentials = fromIni({
       profile: process.env.AWS_PROFILE,
-      // For GovCloud profiles, explicitly set the region to match
       region: effectiveRegion
     });
   }
-  // No explicit credentials
+  else if (isEC2Instance === true) {
+    // If we know we're on EC2, use instance metadata
+    console.log(chalk.green('Using EC2 instance metadata credentials'));
+    clientConfig.credentials = fromInstanceMetadata({
+      timeout: 5000,
+      maxRetries: 3
+    });
+  }
   else {
+    // Default AWS credential chain
     console.log(chalk.yellow('Using default AWS credential provider chain'));
   }
   
@@ -82,6 +119,9 @@ export const applyCredentialsToClients = async () => {
     // Clear cache to force credential refresh
     clientCache.clear();
     
+    // First check if we're on EC2 (for region and credential auto-detection)
+    await checkIfRunningOnEC2();
+    
     // First check existing environment variables (highest priority)
     if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
       console.log(chalk.green('✅ Using existing AWS access key credentials from environment'));
@@ -92,6 +132,19 @@ export const applyCredentialsToClients = async () => {
     const savedCredentials = await loadCredentials();
     if (savedCredentials) {
       console.log(chalk.green(`Found saved credentials (${savedCredentials.method})`));
+      
+      // For EC2 instance metadata method, we don't need to do anything special
+      // credentials will be fetched automatically by the AWS SDK
+      if (savedCredentials.method === 'ec2-instance-metadata') {
+        console.log(chalk.green('✅ Using EC2 instance metadata for credentials'));
+        
+        // If useCurrentRegion is true and we know our region, set it as an environment variable
+        if (savedCredentials.useCurrentRegion && cachedEC2Region) {
+          process.env.AWS_REGION = cachedEC2Region;
+          console.log(chalk.green(`✅ Set AWS_REGION to "${cachedEC2Region}" from instance metadata`));
+        }
+        return true;
+      }
       
       // For access-keys method, set environment variables
       if (savedCredentials.method === 'access-keys') {
@@ -133,6 +186,12 @@ export const applyCredentialsToClients = async () => {
     // Existing AWS_PROFILE (already set before this app ran)
     if (process.env.AWS_PROFILE) {
       console.log(chalk.green(`✅ Using existing AWS_PROFILE: ${process.env.AWS_PROFILE}`));
+      return true;
+    }
+    
+    // On EC2, we can use instance metadata automatically
+    if (isEC2Instance) {
+      console.log(chalk.green('✅ Using EC2 instance metadata for credentials'));
       return true;
     }
     
