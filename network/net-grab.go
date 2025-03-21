@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -476,33 +477,77 @@ func (s *Scanner) scanPorts(ip string) []int {
 	}
 
 	var openPorts []int
-	var wg sync.WaitGroup
 	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	// Create a semaphore to limit concurrent port scans
-	maxConcurrent := 100
+	// Adjust concurrent connections based on port range
+	maxConcurrent := 500
+	if len(portsToScan) > 10000 {
+		maxConcurrent = 200 // Reduce concurrency for large scans
+	}
 	sem := make(chan struct{}, maxConcurrent)
 
-	for _, port := range portsToScan {
-		wg.Add(1)
-		sem <- struct{}{} // Acquire semaphore
+	// Add progress tracking for port scanning
+	var scannedPorts int32
+	totalPorts := len(portsToScan)
 
-		go func(p int) {
-			defer wg.Done()
-			defer func() { <-sem }() // Release semaphore
-
-			address := fmt.Sprintf("%s:%d", ip, p)
-			conn, err := net.DialTimeout("tcp", address, s.timeout)
-			if err == nil {
-				conn.Close()
-				mu.Lock()
-				openPorts = append(openPorts, p)
-				mu.Unlock()
+	// Start progress display goroutine for large scans
+	if totalPorts > 1000 {
+		go func() {
+			for {
+				current := atomic.LoadInt32(&scannedPorts)
+				if current >= int32(totalPorts) {
+					break
+				}
+				percentage := float64(current) / float64(totalPorts) * 100
+				fmt.Printf("\r%sScanning ports: %.1f%% (%d/%d)%s",
+					ColorYellow,
+					percentage,
+					current,
+					totalPorts,
+					ColorReset)
+				time.Sleep(500 * time.Millisecond)
 			}
-		}(port)
+			fmt.Println()
+		}()
 	}
 
-	wg.Wait()
+	// Break ports into chunks for better management
+	chunkSize := 1000
+	for i := 0; i < len(portsToScan); i += chunkSize {
+		end := i + chunkSize
+		if end > len(portsToScan) {
+			end = len(portsToScan)
+		}
+		chunk := portsToScan[i:end]
+
+		for _, port := range chunk {
+			wg.Add(1)
+			sem <- struct{}{} // Acquire semaphore
+
+			go func(p int) {
+				defer wg.Done()
+				defer func() { <-sem }() // Release semaphore
+
+				address := fmt.Sprintf("%s:%d", ip, p)
+				conn, err := net.DialTimeout("tcp", address, s.timeout)
+				if err == nil {
+					conn.Close()
+					mu.Lock()
+					openPorts = append(openPorts, p)
+					mu.Unlock()
+				}
+
+				atomic.AddInt32(&scannedPorts, 1)
+			}(port)
+		}
+
+		// Wait for current chunk to complete before starting next
+		wg.Wait()
+	}
+
+	// Sort the open ports before returning
+	sort.Ints(openPorts)
 	return openPorts
 }
 
