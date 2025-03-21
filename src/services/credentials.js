@@ -33,23 +33,19 @@ async function ensureConfigDir() {
 export async function saveCredentials(credentials, method) {
   await ensureConfigDir();
   
-  // Don't save the actual credentials if method is profile
   const safeCredentials = {
     method,
     timestamp: new Date().toISOString(),
     ...credentials
   };
   
-  // Remove sensitive data based on method
   if (method === 'profile') {
     delete safeCredentials.accessKeyId;
     delete safeCredentials.secretAccessKey;
   } else if (method === 'role') {
-    // We keep the role ARN but remove the source credentials
     delete safeCredentials.sourceCredentials;
   }
   
-  // Log what we're saving
   console.log(chalk.blue('Saving credential configuration:'));
   console.log(chalk.blue(`- Method: ${method}`));
   if (method === 'ec2-instance-metadata') {
@@ -65,12 +61,11 @@ export async function saveCredentials(credentials, method) {
   await fs.writeFile(
     CREDENTIALS_FILE,
     JSON.stringify(safeCredentials, null, 2),
-    { mode: 0o600 } // Restrict read/write to the owner only
+    { mode: 0o600 }
   );
   
   console.log(chalk.green(`Credentials saved to ${CREDENTIALS_FILE}`));
   
-  // Apply credentials to future client creation
   await applyCredentialsToClients();
   
   return safeCredentials;
@@ -359,28 +354,23 @@ export async function testCredentials(credentials) {
     console.log(chalk.yellow('Creating credential provider...'));
     const provider = createCredentialProvider(credentials);
     
-    // Determine the region to use for validation
-    let region = undefined; // Default to auto-detect
+    let region;
     
     if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
-      // For EC2 instance metadata, we'll use the instance's region
       console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-      // Leave region as undefined to let SDK auto-detect
+      region = undefined;
     } else {
-      // Otherwise use the configured region
       region = credentials.isGovCloud 
         ? (credentials.govCloudRegion || 'us-gov-west-1')
         : 'us-east-1';
       console.log(chalk.yellow(`Using region ${region} for validation...`));
     }
     
-    // Create an STS client with the credentials
     const sts = new STSClient({
       credentials: provider,
       region
     });
     
-    // Test the credentials by calling GetCallerIdentity
     console.log(chalk.yellow('Testing credentials...'));
     const identity = await sts.send(new GetCallerIdentityCommand({}));
     
@@ -389,9 +379,7 @@ export async function testCredentials(credentials) {
     console.log(chalk.cyan(`User ID: ${identity.UserId}`));
     console.log(chalk.cyan(`ARN: ${identity.Arn}`));
     
-    // For EC2 validation, only try EC2 test if user didn't request useCurrentRegion
     if (!(credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion)) {
-      // Also test if they can list EC2 regions (common permission)
       try {
         const ec2 = new EC2Client({
           region,
@@ -415,28 +403,23 @@ export async function testCredentials(credentials) {
 // Create credential provider based on configuration
 export function createCredentialProvider(config) {
   if (!config) {
-    // Default to environment or ~/.aws/credentials
     return fromEnv();
   }
   
   console.log(chalk.blue(`Creating credential provider using method: ${config.method}`));
   
-  // For EC2 instance metadata with current region
   if (config.method === 'ec2-instance-metadata') {
     console.log(chalk.blue('Using EC2 instance metadata credentials'));
     
     if (config.useCurrentRegion) {
       console.log(chalk.blue('Using auto-detected region from EC2 instance metadata'));
-      
-      // Explicitly disable profile loading to prevent fallback to ~/.aws/credentials
       return fromInstanceMetadata({
         timeout: 5000, 
         maxRetries: 3,
-        ignoreCache: true, // Don't use cached credentials
-        profile: '' // Empty profile to prevent loading from ~/.aws/credentials
+        ignoreCache: true,
+        profile: ''
       });
     } else {
-      // Using specified region
       const region = config.isGovCloud 
         ? (config.govCloudRegion || 'us-gov-west-1')
         : 'us-east-1';
@@ -452,14 +435,12 @@ export function createCredentialProvider(config) {
     }
   }
   
-  // Otherwise determine the appropriate region based on config
   const region = config.isGovCloud 
     ? (config.govCloudRegion || 'us-gov-west-1')
     : 'us-east-1';
   
   switch (config.method) {
     case 'access-keys':
-      // Create credentials directly from access keys
       return async () => ({
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
@@ -467,13 +448,11 @@ export function createCredentialProvider(config) {
       });
       
     case 'profile':
-      // Use profile from ~/.aws/credentials
       return fromIni({
         profile: config.profile
       });
       
     case 'role':
-      // Assume role with source credentials
       let sourceProvider;
       if (config.sourceCredentials.type === 'environment') {
         sourceProvider = fromEnv();
@@ -500,7 +479,6 @@ export function createCredentialProvider(config) {
       });
       
     case 'web-identity':
-      // Web identity federation
       return fromWebToken({
         roleArn: config.roleArn,
         roleSessionName: config.sessionName || 'cloud-connect-web-session',
@@ -508,15 +486,13 @@ export function createCredentialProvider(config) {
       });
       
     case 'ec2-instance-metadata':
-      // Use EC2 instance metadata service with specified region
       return fromInstanceMetadata({
-        timeout: 5000, // 5 seconds timeout
+        timeout: 5000,
         maxRetries: 3,
         region: region
       });
       
     default:
-      // Default fallback to environment
       return fromEnv();
   }
 }
@@ -527,7 +503,6 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
   
   let credentials;
   
-  // If method is not specified, prompt for it
   if (!method || method === 'interactive' || method === '?') {
     console.log(chalk.yellow('Available credential methods:'));
     console.log('- access-keys: Direct AWS access key and secret key');
@@ -553,7 +528,6 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
     method = answers.method;
   }
   
-  // Configure based on the method
   switch (method) {
     case 'access-keys':
       credentials = await configureAccessKeys();
@@ -574,7 +548,6 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
       throw new Error(`Unknown credential method: ${method}`);
   }
   
-  // Test the credentials
   const valid = await testCredentials(credentials);
   
   if (!valid) {
@@ -594,7 +567,6 @@ export async function configureCredentialsInteractive(method = 'access-keys', sa
     throw new Error('Credential validation failed. Configuration aborted.');
   }
   
-  // Save credentials if requested
   if (save) {
     await saveCredentials(credentials, method);
   }
