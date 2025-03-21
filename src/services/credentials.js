@@ -370,7 +370,7 @@ export async function testCredentials(credentials) {
     
     if (credentials.method === 'ec2-instance-metadata' && credentials.useCurrentRegion) {
       console.log(chalk.yellow('Using current EC2 instance region for validation...'));
-      region = undefined;
+      region = await getEC2Region();
     } else {
       region = credentials.isGovCloud 
         ? (credentials.govCloudRegion || 'us-gov-west-1')
