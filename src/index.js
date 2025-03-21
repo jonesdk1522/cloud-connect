@@ -16,6 +16,50 @@ const __dirname = path.dirname(__filename);
 
 const program = new Command();
 
+// Enable autocompletion
+program
+  .enablePositionalOptions()
+  .allowExcessArguments(false);
+
+// Add completion support
+program
+  .command('completion')
+  .description('Generate shell completion script')
+  .argument('[shell]', 'Shell type: bash, zsh, fish (default: detect current shell)')
+  .action((requestedShell) => {
+    const shell = requestedShell || process.env.SHELL?.split('/').pop() || 'bash';
+    const commonHeader = `# cloud-connect completion for ${shell}\n`;
+    let script = '';
+    let installHint = '';
+    
+    switch(shell) {
+      case 'bash':
+        script = program.completionScript();
+        installHint = `# To install:
+# sudo cp <(cloud-connect completion bash) /etc/bash_completion.d/cloud-connect
+# OR add to ~/.bashrc:
+# source <(cloud-connect completion bash)`;
+        break;
+      case 'zsh':
+        script = program.completionScript();
+        installHint = `# To install:
+# cloud-connect completion zsh > ~/.zsh/completion/_cloud-connect
+# Add to ~/.zshrc: fpath=(~/.zsh/completion $fpath)
+# OR source directly: source <(cloud-connect completion zsh)`;
+        break;
+      case 'fish':
+        script = program.completionScript();
+        installHint = `# To install:
+# cloud-connect completion fish > ~/.config/fish/completions/cloud-connect.fish`;
+        break;
+      default:
+        console.error(chalk.red(`Unsupported shell: ${shell}`));
+        process.exit(1);
+    }
+    
+    console.log(`${commonHeader}\n${installHint}\n\n${script}`);
+  });
+
 // Set up program metadata
 program
   .name('cloud-connect')
@@ -643,14 +687,24 @@ program
   .argument('<cidr>', 'Network CIDR to scan (e.g., 192.168.1.0/24)')
   .option('-v, --verbose', 'Show verbose output', true)
   .option('-j, --json', 'Output as JSON', false)
+  .option('-p, --ports <spec>', 'Port specification (single, range, or comma-separated)', '22,80,443,3389,8080')
+  .option('--all-ports', 'Scan all ports (1-65535)', false)
   .action(async (cidr, options) => {
     try {
       console.log(chalk.cyan(`Starting network scan of ${cidr}...`));
       
       const args = ['-v'];
       if (options.json) args.push('--json');
-      args.push(cidr);
       
+      // Handle port options
+      if (options.allPorts) {
+        args.push('-p', 'all');
+      } else if (options.ports) {
+        args.push('-p', options.ports);
+      }
+      
+      args.push(cidr);
+
       // Use spawn instead of execFile to get real-time output
       const { spawn } = await import('child_process');
       const toolPath = path.join(__dirname, '../bin/net-grab');

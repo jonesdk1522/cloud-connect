@@ -26,6 +26,7 @@ const (
 	ColorPurple = "\033[35m"
 	ColorCyan   = "\033[36m"
 	ColorGray   = "\033[37m"
+	MaxPort     = 65535
 )
 
 type PingStats struct {
@@ -58,6 +59,13 @@ type HostInfo struct {
 	ScannedAt   time.Time `json:"scanned_at"`
 }
 
+type PortScanOptions struct {
+	Ports     []int
+	StartPort int
+	EndPort   int
+	ScanAll   bool
+}
+
 type Scanner struct {
 	ports         []int
 	timeout       time.Duration
@@ -69,6 +77,7 @@ type Scanner struct {
 	hostsScanned  int32 // Atomic counter for progress tracking
 	totalHosts    int   // Total hosts to be scanned
 	progressMutex sync.Mutex
+	portOptions   PortScanOptions
 }
 
 func NewScanner(verbose, liveDisplay bool) *Scanner {
@@ -78,6 +87,10 @@ func NewScanner(verbose, liveDisplay bool) *Scanner {
 		maxHosts:    256,
 		verbose:     verbose,
 		liveDisplay: liveDisplay,
+		portOptions: PortScanOptions{
+			StartPort: 1,
+			EndPort:   MaxPort,
+		},
 	}
 }
 
@@ -446,14 +459,38 @@ func calculateJitter(latencies []float64) float64 {
 }
 
 func (s *Scanner) scanPorts(ip string) []int {
+	var portsToScan []int
+
+	if len(s.portOptions.Ports) > 0 {
+		portsToScan = s.portOptions.Ports
+	} else if s.portOptions.ScanAll {
+		// Generate range for all ports
+		for i := s.portOptions.StartPort; i <= s.portOptions.EndPort; i++ {
+			portsToScan = append(portsToScan, i)
+		}
+	} else {
+		// Generate range for specified port range
+		for i := s.portOptions.StartPort; i <= s.portOptions.EndPort; i++ {
+			portsToScan = append(portsToScan, i)
+		}
+	}
+
 	var openPorts []int
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, port := range s.ports {
+	// Create a semaphore to limit concurrent port scans
+	maxConcurrent := 100
+	sem := make(chan struct{}, maxConcurrent)
+
+	for _, port := range portsToScan {
 		wg.Add(1)
+		sem <- struct{}{} // Acquire semaphore
+
 		go func(p int) {
 			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore
+
 			address := fmt.Sprintf("%s:%d", ip, p)
 			conn, err := net.DialTimeout("tcp", address, s.timeout)
 			if err == nil {
@@ -541,10 +578,71 @@ func formatColoredPorts(ports []int) string {
 	return strings.Join(portStrings, ", ")
 }
 
+func parsePortSpec(spec string) (PortScanOptions, error) {
+	opts := PortScanOptions{}
+
+	// Handle "all" keyword
+	if strings.ToLower(spec) == "all" {
+		opts.ScanAll = true
+		opts.StartPort = 1
+		opts.EndPort = MaxPort
+		return opts, nil
+	}
+
+	// Handle comma-separated list
+	if strings.Contains(spec, ",") {
+		ports := []int{}
+		for _, p := range strings.Split(spec, ",") {
+			port, err := strconv.Atoi(strings.TrimSpace(p))
+			if err != nil || port < 1 || port > MaxPort {
+				return opts, fmt.Errorf("invalid port: %s", p)
+			}
+			ports = append(ports, port)
+		}
+		opts.Ports = ports
+		return opts, nil
+	}
+
+	// Handle port range (e.g., "80-100")
+	if strings.Contains(spec, "-") {
+		parts := strings.Split(spec, "-")
+		if len(parts) != 2 {
+			return opts, fmt.Errorf("invalid port range: %s", spec)
+		}
+
+		start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || start < 1 || start > MaxPort {
+			return opts, fmt.Errorf("invalid start port: %s", parts[0])
+		}
+
+		end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || end < 1 || end > MaxPort {
+			return opts, fmt.Errorf("invalid end port: %s", parts[1])
+		}
+
+		if start > end {
+			start, end = end, start
+		}
+
+		opts.StartPort = start
+		opts.EndPort = end
+		return opts, nil
+	}
+
+	// Handle single port
+	port, err := strconv.Atoi(spec)
+	if err != nil || port < 1 || port > MaxPort {
+		return opts, fmt.Errorf("invalid port: %s", spec)
+	}
+	opts.Ports = []int{port}
+	return opts, nil
+}
+
 func main() {
 	verbose := flag.Bool("v", true, "Enable verbose output")      // Default to true
 	live := flag.Bool("live", true, "Show live scanning results") // Default to true
 	jsonOutput := flag.Bool("json", false, "Output results as JSON")
+	portSpec := flag.String("p", "22,80,443,3389,8080", "Port specification (e.g., '80', '80,443', '1-1000', 'all')")
 	flag.Parse()
 
 	args := flag.Args()
@@ -559,6 +657,15 @@ func main() {
 	fmt.Printf("Starting network scan of %s...\n", args[0])
 
 	scanner := NewScanner(*verbose, *live)
+
+	// Parse port specification
+	portOpts, err := parsePortSpec(*portSpec)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%sError:%s %v\n", ColorRed, ColorReset, err)
+		os.Exit(1)
+	}
+	scanner.portOptions = portOpts
+
 	if err := scanner.scanNetwork(args[0]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

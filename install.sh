@@ -75,6 +75,34 @@ install_cloud_connect() {
   if sudo -n true 2>/dev/null; then
     sudo npm link
     echo "Cloud Connect installed globally with sudo."
+    
+    # Setup shell completion for supported shells
+    echo "Setting up command completion..."
+    COMPLETION_DIR="/etc/bash_completion.d"
+    if [[ -d "$COMPLETION_DIR" ]]; then
+      cloud-connect completion bash | sudo tee "$COMPLETION_DIR/cloud-connect" > /dev/null
+      echo "Installed bash completion to $COMPLETION_DIR"
+    fi
+    
+    # Check for zsh
+    if command -v zsh >/dev/null 2>&1; then
+      ZSH_COMPLETION_DIR="/usr/local/share/zsh/site-functions"
+      if [[ ! -d "$ZSH_COMPLETION_DIR" ]]; then
+        sudo mkdir -p "$ZSH_COMPLETION_DIR"
+      fi
+      cloud-connect completion zsh | sudo tee "$ZSH_COMPLETION_DIR/_cloud-connect" > /dev/null
+      echo "Installed zsh completion to $ZSH_COMPLETION_DIR"
+    fi
+    
+    # Check for fish
+    if command -v fish >/dev/null 2>&1; then
+      FISH_COMPLETION_DIR="/usr/share/fish/vendor_completions.d"
+      if [[ ! -d "$FISH_COMPLETION_DIR" ]]; then
+        sudo mkdir -p "$FISH_COMPLETION_DIR"
+      fi
+      cloud-connect completion fish | sudo tee "$FISH_COMPLETION_DIR/cloud-connect.fish" > /dev/null
+      echo "Installed fish completion to $FISH_COMPLETION_DIR"
+    fi
   else
     echo "No sudo access detected. Installing locally..."
     
@@ -100,6 +128,31 @@ install_cloud_connect() {
       echo
       echo "Then run: source ~/.bashrc (or ~/.zshrc)"
     fi
+    
+    # Setup local shell completion
+    echo "Setting up local command completion..."
+    mkdir -p "$HOME/.local/share/bash-completion/completions"
+    cloud-connect completion bash > "$HOME/.local/share/bash-completion/completions/cloud-connect"
+    
+    if command -v zsh >/dev/null 2>&1; then
+      mkdir -p "$HOME/.local/share/zsh/site-functions"
+      cloud-connect completion zsh > "$HOME/.local/share/zsh/site-functions/_cloud-connect"
+    fi
+    
+    if command -v fish >/dev/null 2>&1; then
+      mkdir -p "$HOME/.config/fish/completions"
+      cloud-connect completion fish > "$HOME/.config/fish/completions/cloud-connect.fish"
+    fi
+    
+    # Add completion sourcing to shell config if not already present
+    for RC_FILE in ~/.bashrc ~/.zshrc; do
+      if [[ -f "$RC_FILE" ]]; then
+        if ! grep -q "cloud-connect completion" "$RC_FILE"; then
+          echo "# Cloud Connect completion" >> "$RC_FILE"
+          echo "source $HOME/.local/share/bash-completion/completions/cloud-connect 2>/dev/null" >> "$RC_FILE"
+        fi
+      fi
+    done
   fi
 }
 
