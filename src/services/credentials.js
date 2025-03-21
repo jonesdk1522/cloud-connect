@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/credential-providers';
 import { STSClient, AssumeRoleCommand, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { EC2Client, DescribeRegionsCommand } from '@aws-sdk/client-ec2';
-import https from 'https';
+import http from 'http'; // Changed from https to http
 import chalk from 'chalk';
 import { applyCredentialsToClients } from '../aws/client.js';
 
@@ -429,7 +429,7 @@ function getEC2Region() {
     };
 
     // First try IMDSv2 - get token
-    const tokenReq = https.request({
+    const tokenReq = http.request({ // Changed from https to http
       ...options,
       path: '/latest/api/token',
       method: 'PUT'
@@ -442,7 +442,7 @@ function getEC2Region() {
       
       tokenRes.on('end', () => {
         // Now use token to get region
-        const regionReq = https.request({
+        const regionReq = http.request({ // Changed from https to http
           ...options,
           headers: {
             'X-aws-ec2-metadata-token': token
@@ -492,7 +492,7 @@ function getEC2Region() {
     function tryIMDSv1() {
       console.log(chalk.blue('Attempting to retrieve region via IMDSv1...'));
       
-      const imdsV1Req = https.request({
+      const imdsV1Req = http.request({ // Changed from https to http
         timeout: 5000,
         host: '169.254.169.254',
         path: '/latest/meta-data/placement/region',
