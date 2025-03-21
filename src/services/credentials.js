@@ -394,19 +394,39 @@ export async function testCredentials(credentials) {
     let resolvedCredentials;
     try {
       if (typeof provider === 'function') {
-        // Pass the already fetched region to avoid double fetching
-        resolvedCredentials = await provider(regionFromMetadata);
+        // Call the first level provider function
+        const firstLevelResult = await provider(regionFromMetadata);
+        
+        // Check if we got another function (credential provider) or direct credentials
+        if (typeof firstLevelResult === 'function') {
+          // If it's a function, call it to get the actual credentials
+          console.log(chalk.yellow('Resolving nested credential provider...'));
+          resolvedCredentials = await firstLevelResult();
+        } else {
+          // If it's not a function, assume it's direct credentials
+          resolvedCredentials = firstLevelResult;
+        }
       } else if (provider && typeof provider.then === 'function') {
         resolvedCredentials = await provider;
       } else {
         resolvedCredentials = provider;
       }
       
-      if (!resolvedCredentials || typeof resolvedCredentials !== 'object') {
+      // Validate the credentials have the necessary properties
+      if (!resolvedCredentials || 
+          typeof resolvedCredentials !== 'object' ||
+          !resolvedCredentials.accessKeyId || 
+          !resolvedCredentials.secretAccessKey) {
+        console.log(chalk.red('Invalid credential format:'), resolvedCredentials);
         throw new Error('Credential provider did not return valid credentials');
       }
+      
+      console.log(chalk.green('Successfully resolved credentials'));
     } catch (error) {
       console.log(chalk.red(`Failed to resolve credentials: ${error.message}`));
+      if (error.stack) {
+        console.log(chalk.yellow('Error stack:'), error.stack);
+      }
       return false;
     }
     
@@ -591,45 +611,45 @@ export function createCredentialProvider(config) {
     console.log(chalk.blue('Using EC2 instance metadata credentials'));
     
     if (config.useCurrentRegion) {
-      console.log(chalk.blue('Attempting to detect region from EC2 instance metadata...'));
-      try {
-        // Accept a pre-fetched region to avoid duplicate calls
-        return async (preFetchedRegion) => {
-          try {
-            // Use the pre-fetched region if available
-            const detectedRegion = preFetchedRegion || await getEC2Region();
-            
-            // Only log if we had to fetch it again
-            if (!preFetchedRegion) {
-              console.log(chalk.green(`Successfully detected region from metadata: ${detectedRegion}`));
-            } else {
-              console.log(chalk.blue(`Using pre-fetched region: ${detectedRegion}`));
-            }
-            
-            return fromInstanceMetadata({
-              timeout: 10000,
-              maxRetries: 5,
-              region: detectedRegion,
-              ignoreCache: false
-            });
-          } catch (error) {
-            console.log(chalk.yellow(`Failed to auto-detect region: ${error.message}`));
-            console.log(chalk.yellow(`Falling back to ${region}`));
-            
-            return fromInstanceMetadata({
-              timeout: 10000,
-              maxRetries: 5,
-              region: region,
-              ignoreCache: false
-            });
+      console.log(chalk.blue('Using EC2 instance metadata with current region'));
+      
+      // Return a function that will resolve the credentials
+      return async (preFetchedRegion) => {
+        try {
+          // Use the pre-fetched region if available
+          const detectedRegion = preFetchedRegion || await getEC2Region();
+          
+          // Only log if we had to fetch it again
+          if (!preFetchedRegion) {
+            console.log(chalk.green(`Successfully detected region from metadata: ${detectedRegion}`));
+          } else {
+            console.log(chalk.blue(`Using pre-fetched region: ${detectedRegion}`));
           }
-        };
-      } catch (error) {
-        console.log(chalk.yellow(`Error initializing EC2 metadata client: ${error.message}`));
-        console.log(chalk.yellow('Falling back to default configuration'));
-      }
+          
+          // Get the credential provider function from the SDK
+          const metadataProvider = fromInstanceMetadata({
+            timeout: 10000,
+            maxRetries: 5,
+            region: detectedRegion
+          });
+          
+          // Return the provider function - it will be called later to get actual credentials
+          return metadataProvider;
+        } catch (error) {
+          console.log(chalk.yellow(`Failed to auto-detect region: ${error.message}`));
+          console.log(chalk.yellow(`Falling back to ${region}`));
+          
+          // Return a provider function for the fallback region
+          return fromInstanceMetadata({
+            timeout: 10000,
+            maxRetries: 5,
+            region: region
+          });
+        }
+      };
     }
     
+    // If not using current region, just return the provider function directly
     return fromInstanceMetadata({
       timeout: 5000,
       maxRetries: 3,
@@ -637,7 +657,7 @@ export function createCredentialProvider(config) {
     });
   }
   
-  // Rest of the credential provider logic using the region variable
+  // For other credential types
   switch (config.method) {
     case 'access-keys':
       return async () => ({
