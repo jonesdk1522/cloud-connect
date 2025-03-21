@@ -62,7 +62,6 @@ install_prerequisites() {
 # Build and install Cloud Connect
 install_cloud_connect() {
   echo "Building Go components..."
-  chmod +x build.sh
   ./build.sh
   
   echo "Installing Node.js dependencies..."
