@@ -6,6 +6,9 @@ import {
   createCredentialProvider,
   getEC2Region
 } from '../services/credentials.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // Client cache to avoid creating redundant clients
 const clientCache = new Map();
@@ -13,6 +16,9 @@ const clientCache = new Map();
 // Track if we're running on EC2
 let isEC2Instance = null;
 let cachedEC2Region = null;
+
+let detectedRegion = null;
+let isRegionDetectionInProgress = false;
 
 /**
  * Check if we're running on an EC2 instance
@@ -34,9 +40,100 @@ async function checkIfRunningOnEC2() {
 }
 
 /**
+ * Detect AWS region from multiple sources - without breaking existing code
+ * This is initiated early but doesn't block client creation
+ */
+function detectAWSRegion() {
+  // Only run detection once
+  if (detectedRegion || isRegionDetectionInProgress) return;
+  isRegionDetectionInProgress = true;
+  
+  // Start detection process asynchronously
+  (async () => {
+    try {
+      // 1. Check environment variables
+      if (process.env.AWS_REGION) {
+        detectedRegion = process.env.AWS_REGION;
+        console.log(chalk.green(`Region detected from AWS_REGION: ${detectedRegion}`));
+        return;
+      }
+      
+      if (process.env.AWS_DEFAULT_REGION) {
+        detectedRegion = process.env.AWS_DEFAULT_REGION;
+        console.log(chalk.green(`Region detected from AWS_DEFAULT_REGION: ${detectedRegion}`));
+        return;
+      }
+      
+      // 2. Check if running on EC2
+      try {
+        if (isEC2Instance === null) {
+          await checkIfRunningOnEC2();
+        }
+        
+        if (isEC2Instance && cachedEC2Region) {
+          detectedRegion = cachedEC2Region;
+          console.log(chalk.green(`Region detected from EC2 metadata: ${detectedRegion}`));
+          return;
+        }
+      } catch (error) {
+        // Not on EC2 or cannot access metadata service
+      }
+      
+      // 3. Check AWS config file
+      try {
+        const configPath = path.join(os.homedir(), '.aws', 'config');
+        if (fs.existsSync(configPath)) {
+          const config = fs.readFileSync(configPath, 'utf8');
+          
+          // Check for active profile
+          const profileToCheck = process.env.AWS_PROFILE || 'default';
+          const profileRegex = new RegExp(`\\[profile ${profileToCheck === 'default' ? 'default' : profileToCheck}\\][^\\[]*?region\\s*=\\s*([^\\s]+)`, 's');
+          const defaultRegex = /\[default\][^\[]*?region\s*=\s*([^\s]+)/s;
+          
+          const profileMatch = config.match(profileRegex);
+          const defaultMatch = config.match(defaultRegex);
+          
+          if (profileMatch && profileMatch[1]) {
+            detectedRegion = profileMatch[1];
+            console.log(chalk.green(`Region detected from AWS config file (profile ${profileToCheck}): ${detectedRegion}`));
+            return;
+          } else if (defaultMatch && defaultMatch[1]) {
+            detectedRegion = defaultMatch[1];
+            console.log(chalk.green(`Region detected from AWS config file (default profile): ${detectedRegion}`));
+            return;
+          }
+        }
+      } catch (error) {
+        // Error reading config file
+      }
+      
+      // 4. Use fallback
+      detectedRegion = 'us-east-1';
+      console.log(chalk.yellow(`No region detected, using default: ${detectedRegion}`));
+    } catch (error) {
+      console.error(chalk.red(`Error detecting AWS region: ${error.message}`));
+      detectedRegion = 'us-east-1';
+    } finally {
+      isRegionDetectionInProgress = false;
+    }
+  })();
+}
+
+/**
  * Creates or returns a cached AWS EC2 client
  */
-export const createEC2Client = (region = 'us-east-1', isGovCloud = false) => {
+export const createEC2Client = (region = null, isGovCloud = false) => {
+  // Start region detection if it hasn't started yet
+  detectAWSRegion();
+  
+  // If no region specified, try to use detected region
+  if (!region && detectedRegion) {
+    region = detectedRegion;
+  } else if (!region) {
+    // Fall back to original default if detection hasn't completed yet
+    region = 'us-east-1';
+  }
+  
   // For GovCloud profiles, ensure we're using a GovCloud region
   if (process.env.AWS_PROFILE && process.env.AWS_PROFILE.toLowerCase().includes('gov')) {
     isGovCloud = true;
@@ -118,6 +215,9 @@ export const applyCredentialsToClients = async () => {
   try {
     // Clear cache to force credential refresh
     clientCache.clear();
+    
+    // Start region detection
+    detectAWSRegion();
     
     // First check if we're on EC2 (for region and credential auto-detection)
     await checkIfRunningOnEC2();
@@ -307,3 +407,6 @@ export const testCredentials = async (isGovCloud = false) => {
     return false;
   }
 };
+
+// Initialize region detection at module load time
+detectAWSRegion();
